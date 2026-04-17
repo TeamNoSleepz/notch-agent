@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:vibe-notch}",
+            "name": "Debug VibeNotch",
+            "target": "VibeNotch",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug VibeNotch"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:vibe-notch}",
+            "name": "Release VibeNotch",
+            "target": "VibeNotch",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release VibeNotch"
+        }
+    ]
+}

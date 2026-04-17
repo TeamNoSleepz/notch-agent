@@ -1,0 +1,99 @@
+/* vibe-notch indicator — 15x15 box of 9 cells (3x3 grid of 5x5 squares).
+   Each cell's opacity is driven by a CSS variable (--o0 .. --o8), mapped
+   left-to-right, top-to-bottom:
+
+     --o0 --o1 --o2
+     --o3 --o4 --o5
+     --o6 --o7 --o8
+
+   A "pattern" is a set of values for those 9 variables. Animating a pattern
+   = transitioning those variables (we do it via the `transition` rule below).
+   Swap patterns by changing the `data-pattern` attribute on `.indicator`.
+
+   Patterns live at the bottom of this file. */
+
+.indicator {
+  position: relative;
+  width: 15px;
+  height: 15px;
+
+  --indicator-color: #ffaa9b;
+  --indicator-dur: 260ms;
+  --indicator-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* default pattern is fully dark — real patterns override these */
+  --o0: 0; --o1: 0; --o2: 0;
+  --o3: 0; --o4: 0; --o5: 0;
+  --o6: 0; --o7: 0; --o8: 0;
+}
+
+.indicator-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 5px);
+  grid-template-rows: repeat(3, 5px);
+}
+
+.indicator-layer.glow {
+  filter: blur(4px);
+}
+
+.indicator-layer > span {
+  background: var(--indicator-color);
+  transition: opacity var(--indicator-dur) var(--indicator-ease);
+}
+
+.indicator-layer > span:nth-child(1) { opacity: var(--o0); }
+.indicator-layer > span:nth-child(2) { opacity: var(--o1); }
+.indicator-layer > span:nth-child(3) { opacity: var(--o2); }
+.indicator-layer > span:nth-child(4) { opacity: var(--o3); }
+.indicator-layer > span:nth-child(5) { opacity: var(--o4); }
+.indicator-layer > span:nth-child(6) { opacity: var(--o5); }
+.indicator-layer > span:nth-child(7) { opacity: var(--o6); }
+.indicator-layer > span:nth-child(8) { opacity: var(--o7); }
+.indicator-layer > span:nth-child(9) { opacity: var(--o8); }
+
+/* ---------- Patterns ---------- */
+
+/* idle: four corners + center (the "X with heart" shape) */
+.indicator[data-pattern="idle"] {
+  --o0: 1; --o2: 1;
+  --o4: 1;
+  --o6: 1; --o8: 1;
+}
+
+/* thinking: plus sign — will become an animation target */
+.indicator[data-pattern="thinking"] {
+  --o1: 1;
+  --o3: 1; --o4: 1; --o5: 1;
+  --o7: 1;
+}
+
+/* tool-running: horizontal bar pulsing through rows */
+.indicator[data-pattern="tool"] {
+  --o0: 0.3; --o1: 0.3; --o2: 0.3;
+  --o3: 1;   --o4: 1;   --o5: 1;
+  --o6: 0.3; --o7: 0.3; --o8: 0.3;
+}
+
+/* awaiting: center only, dim corners */
+.indicator[data-pattern="awaiting"] {
+  --o0: 0.2; --o2: 0.2;
+  --o4: 1;
+  --o6: 0.2; --o8: 0.2;
+}
+
+/* done: all on */
+.indicator[data-pattern="done"] {
+  --o0: 1; --o1: 1; --o2: 1;
+  --o3: 1; --o4: 1; --o5: 1;
+  --o6: 1; --o7: 1; --o8: 1;
+}
+
+/* off: all dark (explicit) */
+.indicator[data-pattern="off"] {
+  --o0: 0; --o1: 0; --o2: 0;
+  --o3: 0; --o4: 0; --o5: 0;
+  --o6: 0; --o7: 0; --o8: 0;
+}

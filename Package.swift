@@ -6,8 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "VibeNotch",
-            resources: [.copy("Resources")]
+            name: "VibeNotch"
         )
     ]
 )

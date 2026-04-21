@@ -1,4 +1,5 @@
 .build/
+VibeNotch.app/
 node_modules/
 _tauri_attempt/src-tauri/target/
 .DS_Store

@@ -23,8 +23,15 @@ case "$EVENT" in
     printf '%s  Thinking\n' "$TS" >> "$LOG"
     ;;
   stop)
-    echo "awaiting" > /tmp/vibe-notch
-    printf '%s  Waiting\n' "$TS" >> "$LOG"
+    INPUT=$(cat)
+    OUTPUT=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
+    if printf '%s' "$OUTPUT" | grep -qiE "\?[[:space:]]*$|should I|shall I|do you want|would you like|please confirm|want me to|proceed\?|continue\?"; then
+      echo "awaiting" > /tmp/vibe-notch
+      printf '%s  Awaiting\n' "$TS" >> "$LOG"
+    else
+      echo "idle" > /tmp/vibe-notch
+      printf '%s  Done\n' "$TS" >> "$LOG"
+    fi
     ;;
   session-start)
     echo "idle" > /tmp/vibe-notch

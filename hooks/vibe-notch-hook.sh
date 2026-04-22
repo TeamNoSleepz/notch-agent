@@ -4,7 +4,7 @@
 # and appends a human-readable line to /tmp/vibe-notch-log.
 #
 # Usage: vibe-notch-hook.sh <event>
-# Events: user-prompt | pre-tool | post-tool | stop | session-start
+# Events: user-prompt | pre-tool | post-tool | stop | session-start | permission
 
 EVENT="$1"
 LOG=/tmp/vibe-notch-log
@@ -35,5 +35,9 @@ case "$EVENT" in
     ;;
   session-start)
     echo "idle" > /tmp/vibe-notch
+    ;;
+  permission)
+    echo "awaiting" > /tmp/vibe-notch
+    printf '%s  Permission\n' "$TS" >> "$LOG"
     ;;
 esac

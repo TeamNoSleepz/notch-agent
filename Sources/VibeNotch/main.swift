@@ -43,6 +43,62 @@ struct IndicatorView: View {
     }
 }
 
+// MARK: - Notch Shape
+//
+// Mimics the real MacBook notch geometry:
+//   • outerRadius — concave anti-corners where the notch sides meet the screen top
+//   • innerRadius — convex rounded corners at the bottom where the notch meets the menu bar
+//
+// The concave corners taper the visible notch width by outerRadius on each side,
+// matching the hardware transition from the full-width bezel into the notch body.
+
+struct NotchShape: Shape {
+    var outerRadius: CGFloat  // concave corners at screen-top edge
+    var innerRadius: CGFloat  // convex corners at menu-bar edge
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { .init(outerRadius, innerRadius) }
+        set { outerRadius = newValue.first; innerRadius = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+
+        // concave outer corner — top-left
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX + outerRadius, y: rect.minY + outerRadius),
+            control: CGPoint(x: rect.minX + outerRadius, y: rect.minY)
+        )
+
+        // left inner wall → convex bottom-left corner
+        p.addLine(to: CGPoint(x: rect.minX + outerRadius, y: rect.maxY - innerRadius))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX + outerRadius + innerRadius, y: rect.maxY),
+            control: CGPoint(x: rect.minX + outerRadius, y: rect.maxY)
+        )
+
+        // bottom
+        p.addLine(to: CGPoint(x: rect.maxX - outerRadius - innerRadius, y: rect.maxY))
+
+        // convex bottom-right corner → right inner wall
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX - outerRadius, y: rect.maxY - innerRadius),
+            control: CGPoint(x: rect.maxX - outerRadius, y: rect.maxY)
+        )
+        p.addLine(to: CGPoint(x: rect.maxX - outerRadius, y: rect.minY + outerRadius))
+
+        // concave outer corner — top-right
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: rect.maxX - outerRadius, y: rect.minY)
+        )
+
+        p.closeSubpath()
+        return p
+    }
+}
+
 // MARK: - Notch View
 
 struct NotchView: View {
@@ -52,6 +108,7 @@ struct NotchView: View {
         HStack(spacing: 0) {
             IndicatorView(pattern: state.pattern)
                 .frame(width: 32, height: 32)
+                .padding(.leading, 8)
 
             Spacer()
 
@@ -63,20 +120,13 @@ struct NotchView: View {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.black)
                 )
+                .frame(width: 32, height: 32)
                 .padding(.trailing, 8)
         }
-        .frame(width: 248)
         .frame(maxHeight: .infinity)
         .background(
-            UnevenRoundedRectangle(
-                cornerRadii: RectangleCornerRadii(
-                    topLeading: 0,
-                    bottomLeading: 10,
-                    bottomTrailing: 10,
-                    topTrailing: 0
-                )
-            )
-            .fill(Color.black)
+            NotchShape(outerRadius: 8, innerRadius: 10)
+                .fill(Color.black)
         )
     }
 }
@@ -85,7 +135,7 @@ struct NotchView: View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NotchPanel!
-    private let panelWidth: CGFloat = 248
+    private let sideSlotWidth: CGFloat = 40  // 32pt item + 8pt inward padding
     private var statusItem: NSStatusItem!
     // Only observes $pattern — agentCount isn't shown in the button, only in the menu on open
     private var stateObserver: AnyCancellable?
@@ -198,10 +248,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return h > 0 ? h : screen.frame.maxY - screen.visibleFrame.maxY
     }
 
+    // Returns the panel frame in screen coordinates: indicator slot | physical notch | badge slot.
+    // Falls back to a centered 64-pt panel on displays without a notch.
+    private func panelFrame(for screen: NSScreen) -> NSRect {
+        let height = notchHeight(for: screen)
+        let sf = screen.frame
+        let y = sf.origin.y + sf.height - height
+
+        if let left = screen.auxiliaryTopLeftArea,
+           let right = screen.auxiliaryTopRightArea {
+            let notchLeft  = left.maxX
+            let notchRight = right.minX
+            let x = notchLeft - sideSlotWidth
+            let w = (notchRight - notchLeft) + sideSlotWidth * 2
+            return NSRect(x: x, y: y, width: w, height: height)
+        }
+
+        // Non-notch fallback
+        let w = sideSlotWidth * 2
+        let x = sf.origin.x + (sf.width - w) / 2
+        return NSRect(x: x, y: y, width: w, height: height)
+    }
+
     private func buildPanel() {
         let screen = NSScreen.main
-        let height = screen.map { notchHeight(for: $0) } ?? 32
-        let size = NSSize(width: panelWidth, height: height)
+        let frame = screen.map { panelFrame(for: $0) } ?? NSRect(x: 0, y: 0, width: 64, height: 32)
+        let size = frame.size
 
         panel = NotchPanel(
             contentRect: NSRect(origin: .zero, size: size),
@@ -227,8 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.ignoresMouseEvents = true
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        // Prevents the notch overlay from appearing in screen recordings and screenshots
-        panel.sharingType = .none
+        panel.sharingType = .readOnly
         panel.appearance = NSAppearance(named: .darkAqua)
 
         let hosting = NSHostingView(rootView: NotchView())
@@ -243,11 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func centerOverNotch() {
         guard let screen = NSScreen.main else { return }
-        let height = notchHeight(for: screen)
-        let sf = screen.frame
-        let x = sf.origin.x + (sf.width - panelWidth) / 2
-        let y = sf.origin.y + sf.height - height
-        panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: height), display: false)
+        panel.setFrame(panelFrame(for: screen), display: false)
     }
 }
 

@@ -141,6 +141,11 @@ struct SoundRowView: View {
             .onChange(of: soundName) { newName in
                 NSSound(named: NSSound.Name(newName))?.play()
             }
+            Button(action: { NSSound(named: NSSound.Name(soundName))?.play() }) {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
         }
     }
 }

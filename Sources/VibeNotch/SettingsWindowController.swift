@@ -234,6 +234,44 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - Update Checker
+
+final class UpdateChecker {
+    static let releasesURL = URL(string: "https://github.com/TeamNoSleepz/vibe-notch/releases")!
+    private static let apiURL = URL(string: "https://api.github.com/repos/TeamNoSleepz/vibe-notch/releases/latest")!
+
+    static func check(completion: @escaping (String?) -> Void) {
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let remote = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+            DispatchQueue.main.async {
+                completion(isNewer(remote, than: current) ? remote : nil)
+            }
+        }.resume()
+    }
+
+    private static func isNewer(_ a: String, than b: String) -> Bool {
+        let av = a.split(separator: ".").compactMap { Int($0) }
+        let bv = b.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(av.count, bv.count) {
+            let ai = i < av.count ? av[i] : 0
+            let bi = i < bv.count ? bv[i] : 0
+            if ai != bi { return ai > bi }
+        }
+        return false
+    }
+}
+
 // MARK: - Window Controller
 
 final class SettingsWindowController {

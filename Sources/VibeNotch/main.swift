@@ -301,6 +301,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ClaudeState.shared.start()
         setupStatusItem()
 
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            UpdateChecker.check { version in
+                guard let version,
+                      let menu = self?.statusItem?.menu,
+                      let item = menu.item(withTag: 10) else { return }
+                item.title = "  Update available: v\(version)"
+                item.isHidden = false
+            }
+        }
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screensChanged),
@@ -360,6 +370,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(launchItem)
         }
 
+        let updateItem = NSMenuItem(
+            title: "  Update available",
+            action: #selector(openReleasesPage),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        updateItem.tag = 10
+        updateItem.isHidden = true
+        menu.addItem(updateItem)
+
         menu.addItem(.separator())
 
         let prefsItem = NSMenuItem(
@@ -383,6 +403,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openPreferences() {
         SettingsWindowController.shared.showWindow()
+    }
+
+    @objc private func openReleasesPage() {
+        NSWorkspace.shared.open(UpdateChecker.releasesURL)
     }
 
     @objc private func toggleLaunchAtLogin() {

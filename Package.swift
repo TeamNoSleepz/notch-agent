@@ -6,7 +6,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "VibeNotch"
+            name: "VibeNotch",
+            linkerSettings: [.linkedFramework("AVFoundation")]
         )
     ]
 )

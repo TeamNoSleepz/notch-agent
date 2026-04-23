@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 import ServiceManagement
 
@@ -122,6 +123,13 @@ struct SoundRowView: View {
     let label: String
     @Binding var enabled: Bool
     @Binding var soundName: String
+    @State private var previewPlayer: AVAudioPlayer?
+
+    private func preview(_ name: String) {
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        previewPlayer = try? AVAudioPlayer(contentsOf: url)
+        previewPlayer?.play()
+    }
 
     var body: some View {
         HStack {
@@ -139,9 +147,9 @@ struct SoundRowView: View {
             .frame(width: 120)
             .disabled(!enabled)
             .onChange(of: soundName) { newName in
-                NSSound(named: NSSound.Name(newName))?.play()
+                preview(newName)
             }
-            Button(action: { NSSound(named: NSSound.Name(soundName))?.play() }) {
+            Button(action: { preview(soundName) }) {
                 Image(systemName: "play.circle")
             }
             .buttonStyle(.plain)

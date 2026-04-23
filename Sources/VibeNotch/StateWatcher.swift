@@ -1,4 +1,4 @@
-import AppKit
+import AVFoundation
 import SwiftUI
 import Combine
 import Foundation
@@ -14,6 +14,7 @@ final class ClaudeState: ObservableObject {
     private var acceptSource: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.vibenotch.socket", qos: .userInitiated)
     private var agentCancellable: AnyCancellable?
+    private var audioPlayer: AVAudioPlayer?
 
     private struct HookEvent: Decodable {
         let status: String
@@ -117,16 +118,19 @@ final class ClaudeState: ObservableObject {
 
     private func playSound(for old: IndicatorPattern, to new: IndicatorPattern) {
         let prefs = AppPreferences.shared
+        let name: String?
         switch (old, new) {
         case (_, .awaiting):
-            guard prefs.interruptSoundEnabled else { return }
-            NSSound(named: NSSound.Name(prefs.interruptSoundName))?.play()
+            name = prefs.interruptSoundEnabled ? prefs.interruptSoundName : nil
         case (.working, .idle), (.awaiting, .idle):
-            guard prefs.finishSoundEnabled else { return }
-            NSSound(named: NSSound.Name(prefs.finishSoundName))?.play()
+            name = prefs.finishSoundEnabled ? prefs.finishSoundName : nil
         default:
-            break
+            name = nil
         }
+        guard let soundName = name else { return }
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(soundName).aiff")
+        audioPlayer = try? AVAudioPlayer(contentsOf: url)
+        audioPlayer?.play()
     }
 
     private static func countRunningAgents() -> Int {

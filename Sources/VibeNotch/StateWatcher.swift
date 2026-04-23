@@ -1,22 +1,26 @@
+import AppKit
 import SwiftUI
 import Combine
+import Foundation
+import Darwin
 
 final class ClaudeState: ObservableObject {
     static let shared = ClaudeState()
     @Published var pattern: IndicatorPattern = .idle
     @Published var agentCount: Int = 0
 
-    // Written by Claude Code hooks (hooks/vibe-notch-hook.sh) on every event
-    private let statePath = "/tmp/vibe-notch"
-    private var cancellable: AnyCancellable?
+    private static let socketPath = "/tmp/vibe-notch.sock"
+    private var serverSocket: Int32 = -1
+    private var acceptSource: DispatchSourceRead?
+    private let queue = DispatchQueue(label: "com.vibenotch.socket", qos: .userInitiated)
     private var agentCancellable: AnyCancellable?
 
+    private struct HookEvent: Decodable {
+        let status: String
+    }
+
     func start() {
-        // Polling instead of FSEvents — simpler, and 300ms is fast enough for a visual indicator
-        cancellable = Timer.publish(every: 0.3, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in self?.poll() }
-        poll()
+        queue.async { [weak self] in self?.bindAndListen() }
 
         agentCancellable = Timer.publish(every: 2.0, on: .main, in: .common)
             .autoconnect()
@@ -24,23 +28,85 @@ final class ClaudeState: ObservableObject {
         pollAgentCount()
     }
 
-    private func poll() {
-        guard let raw = try? String(contentsOfFile: statePath, encoding: .utf8) else {
-            if pattern != .idle { pattern = .idle }
-            return
+    private func bindAndListen() {
+        unlink(Self.socketPath)
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return }
+        serverSocket = fd
+
+        let flags = fcntl(fd, F_GETFL)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        Self.socketPath.withCString { ptr in
+            withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
+                let buf = UnsafeMutableRawPointer(pathPtr).assumingMemoryBound(to: CChar.self)
+                strcpy(buf, ptr)
+            }
         }
+
+        let bindOk = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        } == 0
+
+        guard bindOk else { close(fd); serverSocket = -1; return }
+
+        chmod(Self.socketPath, 0o600)
+        guard listen(fd, 10) == 0 else { close(fd); serverSocket = -1; return }
+
+        acceptSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        acceptSource?.setEventHandler { [weak self] in self?.acceptConnection() }
+        acceptSource?.resume()
+    }
+
+    private func acceptConnection() {
+        let client = accept(serverSocket, nil, nil)
+        guard client >= 0 else { return }
+
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 65536)
+        var pfd = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+        let deadline = Date().addingTimeInterval(0.5)
+
+        while Date() < deadline {
+            let r = poll(&pfd, 1, 50)
+            if r > 0 && (pfd.revents & Int16(POLLIN)) != 0 {
+                let n = read(client, &buf, buf.count)
+                if n > 0 { data.append(contentsOf: buf[0..<n]) }
+                else { break }
+            } else if r == 0 && !data.isEmpty {
+                break
+            } else if r < 0 { break }
+        }
+        close(client)
+
+        guard let event = try? JSONDecoder().decode(HookEvent.self, from: data) else { return }
+
         let next: IndicatorPattern
-        switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "thinking", "tool": next = .working
-        case "awaiting":         next = .awaiting
-        default:                 next = .idle
+        switch event.status {
+        case "processing", "running_tool", "compacting":
+            next = .working
+        case "waiting_for_approval":
+            next = .awaiting
+        default:
+            next = .idle
         }
-        // Guard against redundant assignments — each @Published write triggers a SwiftUI redraw
-        if pattern != next { pattern = next }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let prev = self.pattern
+            if prev != next {
+                self.pattern = next
+                self.playSound(for: prev, to: next)
+            }
+        }
     }
 
     private func pollAgentCount() {
-        // pgrep spawns a subprocess; dispatch to avoid blocking the main thread every 2s
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let count = Self.countRunningAgents()
             DispatchQueue.main.async {
@@ -49,20 +115,31 @@ final class ClaudeState: ObservableObject {
         }
     }
 
+    private func playSound(for old: IndicatorPattern, to new: IndicatorPattern) {
+        let prefs = AppPreferences.shared
+        switch (old, new) {
+        case (_, .awaiting):
+            guard prefs.interruptSoundEnabled else { return }
+            NSSound(named: NSSound.Name(prefs.interruptSoundName))?.play()
+        case (.working, .idle), (.awaiting, .idle):
+            guard prefs.finishSoundEnabled else { return }
+            NSSound(named: NSSound.Name(prefs.finishSoundName))?.play()
+        default:
+            break
+        }
+    }
+
     private static func countRunningAgents() -> Int {
         let task = Process()
         task.launchPath = "/usr/bin/pgrep"
-        // -x = exact name match; without it "claude-helper" and similar would be counted too
         task.arguments = ["-x", "claude"]
         let pipe = Pipe()
         task.standardOutput = pipe
-        // Discard stderr — pgrep exits 1 with no output when no processes match, which is normal
         task.standardError = Pipe()
         try? task.run()
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
-        // Each non-empty line is one PID
         return output.components(separatedBy: .newlines).filter { !$0.isEmpty }.count
     }
 }

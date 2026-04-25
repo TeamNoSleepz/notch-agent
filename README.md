@@ -12,11 +12,11 @@ A slim panel sits flush inside the physical notch. Three states:
 
 | State | Animation | Color |
 |---|---|---|
-| **Idle** | Single center dot | Grey |
-| **Working** | Animated trail (randomized pattern) | Amber/cream with glow |
-| **Awaiting input** | Pulsing corner cells | Red |
+| **Idle** | Slow animated trail (same pattern as Working) | Grey |
+| **Working** | Animated trail (randomized pattern) with glow | Cream with orange glow |
+| **Awaiting input** | Trail cycling down center column | Red |
 
-The right side of the notch shows a live count of running `claude` processes. The menu bar item uses a grid icon that opens status and settings.
+The right side of the notch shows a live count of running `claude` processes. The menu bar item opens status and settings.
 
 ---
 
@@ -77,7 +77,7 @@ Notch panel + menu bar icon
 
 Click the menu bar icon → **Settings** to configure:
 
-- **Color palette** — Default (amber), Neon (green/blue), Pastel
+- **Color palette** — Default (cream/red/grey)
 - **Sounds** — optional chime when Claude interrupts you or finishes a task (uses system sounds, routed through AVAudioPlayer for Bluetooth compatibility)
 
 Click **Submit Feedback** to open a GitHub issue.

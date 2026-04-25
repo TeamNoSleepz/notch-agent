@@ -63,8 +63,9 @@ Notch panel + menu bar icon
 
 | Event | State |
 |---|---|
-| `PreToolUse`, `UserPromptSubmit`, `PostToolUse` | Working |
-| `Stop`, `SessionStart`, `SessionEnd`, `PermissionRequest` | Awaiting input |
+| `PreToolUse`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` | Working |
+| `Stop`, `StopFailure`, `SessionStart`, `PermissionRequest`, `Notification` (idle) | Awaiting input |
+| `SessionEnd`, `Notification` (other) | Idle |
 
 **Notch panel** — an `NSPanel` at `mainMenu + 3` window level, sized to the physical notch using `auxiliaryTopLeftArea` / `auxiliaryTopRightArea`. Mouse events pass through.
 
@@ -122,14 +123,19 @@ notch-agent/
 ├── Sources/NotchAgent/
 │   ├── main.swift                      # NSPanel, NSStatusItem, IndicatorView, AppDelegate
 │   ├── StateWatcher.swift              # ClaudeState — Unix socket server + agent counter
-│   └── SettingsWindowController.swift  # Settings UI, AppPreferences, color palettes
+│   ├── SettingsWindowController.swift  # Settings UI, AppPreferences, color palettes
+│   └── Resources/                      # App icon, status bar icon
 ├── hooks/
-│   └── notch-agent-hook.py              # Claude Code hook — sends events via Unix socket
+│   ├── notch-agent-hook.py             # Claude Code hook — sends events via Unix socket
+│   ├── notch-agent-hook.sh             # Shell wrapper for the hook
+│   └── watch.sh                        # File watcher for dev rebuilds
 ├── scripts/
 │   ├── bundle.sh                       # Creates NotchAgent.app bundle
 │   └── install.sh                      # bundle.sh + copy to /Applications
+├── docs/
 ├── setup.sh                            # One-command install + hook wiring
 ├── uninstall.sh                        # Full cleanup
+├── dev.sh                              # Auto-rebuild on file changes
 └── Package.swift
 ```
 

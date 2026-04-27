@@ -8,6 +8,8 @@ While Claude is thinking, running tools, or waiting for input, a 3×3 pixel grid
 
 ## What it looks like
 
+![NotchAgent showing the notch indicator with process count](docs/assets/notch-screenshot.png)
+
 A slim panel sits flush inside the physical notch. Three states:
 
 | State | Animation | Color |

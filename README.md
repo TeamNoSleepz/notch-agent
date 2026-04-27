@@ -8,15 +8,13 @@ While Claude is thinking, running tools, or waiting for input, a 3×3 pixel grid
 
 ## What it looks like
 
-![NotchAgent showing the notch indicator with process count](docs/assets/notch-screenshot.png)
-
 A slim panel sits flush inside the physical notch. Three states:
 
-| State | Animation | Color |
-|---|---|---|
-| **Idle** | Slow animated trail (same pattern as Working) | Grey |
-| **Working** | Animated trail (randomized pattern) with glow | Cream with orange glow |
-| **Awaiting input** | Trail cycling down center column | Red |
+| State | Animation | Color | Preview |
+|---|---|---|---|
+| **Idle** | Slow animated trail | Grey | ![Idle](docs/assets/notch-idle.png) |
+| **Working** | Animated trail with glow | Cream + orange glow | ![Working](docs/assets/notch-working.png) |
+| **Awaiting input** | Trail cycling down center column | Red | ![Awaiting](docs/assets/notch-awaiting.png) |
 
 The right side of the notch shows a live count of running `claude` processes. The menu bar item opens status and settings.
 

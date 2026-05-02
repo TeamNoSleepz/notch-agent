@@ -6,9 +6,31 @@ Fire-and-forget: exits immediately after sending, no bidirectional handling.
 import json
 import os
 import socket
+import subprocess
 import sys
 
 SOCKET_PATH = "/tmp/notch-agent.sock"
+
+
+def find_claude_pid():
+    """Walk up the process tree to find the nearest ancestor named 'claude'."""
+    try:
+        pid = os.getpid()
+        for _ in range(6):
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=1,
+            )
+            parts = result.stdout.strip().split(None, 1)
+            if len(parts) < 2:
+                break
+            ppid_str, comm = parts
+            if comm.strip() == "claude":
+                return int(pid)
+            pid = int(ppid_str.strip())
+    except Exception:
+        pass
+    return None
 
 
 def send_event(state):
@@ -36,7 +58,7 @@ def main():
         "session_id": session_id,
         "cwd": cwd,
         "event": event,
-        "pid": os.getppid(),
+        "pid": find_claude_pid(),
     }
 
     if event == "PreToolUse":

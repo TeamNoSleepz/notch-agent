@@ -11,6 +11,28 @@ final class NotchPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+// Transparent container that only accepts hit-tests within the visible notch area.
+// Used so ignoresMouseEvents=false (needed when expanded) doesn't also swallow
+// clicks in the transparent region around the notch.
+final class NotchContentView: NSView {
+    var hitRect: NSRect = .zero
+
+    override var wantsLayer: Bool { get { true } set {} }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        layer?.contentsScale = scale
+        subviews.forEach { $0.layer?.contentsScale = scale }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        hitRect.contains(point) ? super.hitTest(point) : nil
+    }
+
+    override var isOpaque: Bool { false }
+}
+
 // MARK: - Visual Effect Blur
 
 struct VisualEffectBlur: NSViewRepresentable {
@@ -22,6 +44,15 @@ struct VisualEffectBlur: NSViewRepresentable {
         return v
     }
     func updateNSView(_ v: NSVisualEffectView, context: Context) {}
+}
+
+// MARK: - Hover State
+
+final class NotchHoverState: ObservableObject {
+    static let shared = NotchHoverState()
+    @Published var expanded = false
+    @Published var hoveredAgentIndex: Int? = nil
+    var visibleListHeight: CGFloat = 256
 }
 
 // MARK: - Indicator
@@ -196,6 +227,125 @@ struct IndicatorView: View {
     }
 }
 
+// MARK: - Agent List
+
+struct AgentListView: View {
+    @ObservedObject private var state = ClaudeState.shared
+    @ObservedObject private var hover = NotchHoverState.shared
+    @Binding var measuredHeight: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            // Hidden VStack at natural height — unconstrained so GeometryReader
+            // sees true content height. Uses .task(id:) which fires reliably on
+            // the main actor whenever the measured height changes.
+            VStack(spacing: 0) { rows }
+                .padding(.vertical, 8)
+                .background(GeometryReader { g in
+                    Color.clear.task(id: g.size.height) {
+                        measuredHeight = g.size.height
+                    }
+                })
+                .hidden()
+                .allowsHitTesting(false)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) { rows }
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var rows: some View {
+        ForEach(Array(state.agents.enumerated()), id: \.element.id) { index, agent in
+            AgentRowView(agent: agent, index: index)
+                .opacity(hover.expanded ? 1 : 0)
+                .offset(y: hover.expanded ? 0 : 6)
+                .animation(
+                    .spring(response: 0.38, dampingFraction: 0.88)
+                        .delay(hover.expanded ? 0.08 + Double(index) * 0.05 : 0),
+                    value: hover.expanded
+                )
+        }
+    }
+}
+
+private struct AgentRowView: View {
+    let agent: AgentEntry
+    let index: Int
+    @ObservedObject private var hover = NotchHoverState.shared
+    @ObservedObject private var state = ClaudeState.shared
+    @State private var bgOpacity: Double = 0
+
+    var isHovered: Bool { hover.hoveredAgentIndex == index }
+    var isPinned: Bool  { state.pinnedAgentId == agent.id }
+
+    private var subtitleText: String {
+        let dir = URL(fileURLWithPath: agent.cwd).lastPathComponent
+        return dir.isEmpty ? "Claude Code" : "Claude Code · \(dir)"
+    }
+
+    private var stateText: String {
+        switch agent.pattern {
+        case .working:
+            if let tool = agent.tool, !tool.isEmpty { return tool }
+            return "Working"
+        case .awaiting:
+            return "Awaiting input"
+        case .idle:
+            return "Waiting"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            IndicatorView(pattern: agent.pattern)
+                .frame(width: 15, height: 15)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(subtitleText)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(Color(red: 0.6, green: 0.6, blue: 0.6))
+                Text(stateText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(red: 0.98, green: 0.98, blue: 0.98))
+            }
+            Spacer()
+            Image(systemName: isPinned ? "pin.fill" : "pin")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(isPinned ? .white.opacity(0.9) : .white.opacity(0.35))
+                .opacity(isHovered || isPinned ? 1 : 0)
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
+                .animation(.easeInOut(duration: 0.15), value: isPinned)
+                .padding(.trailing, 4)
+        }
+        .padding(.top, 11)
+        .padding(.bottom, 10)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(red: 31/255, green: 31/255, blue: 31/255))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color(red: 48/255, green: 48/255, blue: 48/255), lineWidth: 1)
+                )
+                .opacity(bgOpacity)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
+        .onTapGesture {
+            state.pinnedAgentId = isPinned ? nil : agent.id
+        }
+        .onAppear { bgOpacity = isHovered ? 1 : 0 }
+        .onChange(of: hover.hoveredAgentIndex) { newIndex in
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+                bgOpacity = (newIndex == index) ? 1 : 0
+            }
+        }
+    }
+}
+
 // MARK: - Notch Shape
 //
 // Mimics the real MacBook notch geometry:
@@ -257,31 +407,63 @@ struct NotchShape: Shape {
 struct NotchView: View {
     @ObservedObject var state = ClaudeState.shared
     @ObservedObject var prefs = AppPreferences.shared
+    @ObservedObject var hover = NotchHoverState.shared
+
+    let barHeight: CGFloat
+    let collapsedWidth: CGFloat
+    private let expandedWidth: CGFloat = 480
+    private let maxListHeight: CGFloat = 256
+    @State private var listContentHeight: CGFloat = 0
+
+    var listHeight: CGFloat    { listContentHeight > 0 ? min(listContentHeight, maxListHeight) : maxListHeight }
+    var currentWidth: CGFloat  { hover.expanded ? expandedWidth  : collapsedWidth }
+    var currentHeight: CGFloat { hover.expanded ? barHeight + listHeight : barHeight }
+
+    private var displayPattern: IndicatorPattern {
+        if let id = state.pinnedAgentId, let agent = state.agents.first(where: { $0.id == id }) {
+            return agent.pattern
+        }
+        return state.pattern
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            IndicatorView(pattern: state.pattern)
-                .frame(width: 32, height: 32)
-                .padding(.leading, 8)
-
-            Spacer()
-
-            Text("\(state.agentCount)")
-                .font(.custom("IBMPlexMono-SemiBold", size: 13))
-                .foregroundColor(.white)
-                .frame(width: 18, height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.black)
-                )
-                .frame(width: 32, height: 32)
-                .padding(.trailing, 8)
-        }
-        .frame(maxHeight: .infinity)
-        .background(
-            NotchShape(outerRadius: 8, innerRadius: 10)
+        ZStack(alignment: .top) {
+            // Shape animates width, height, and corner radii together
+            NotchShape(outerRadius: hover.expanded ? 0 : 8,
+                       innerRadius: hover.expanded ? 18 : 10)
                 .fill(Color.black)
-        )
+                .frame(width: currentWidth, height: currentHeight)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    IndicatorView(pattern: displayPattern)
+                        .frame(width: 32, height: 32)
+                        .padding(.leading, 8)
+
+                    Spacer()
+
+                    Text("\(state.agentCount)")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 18, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.black)
+                        )
+                        .frame(width: 32, height: 32)
+                        .padding(.trailing, 8)
+                }
+                .frame(width: currentWidth, height: barHeight)
+
+                AgentListView(measuredHeight: $listContentHeight)
+                    .frame(width: currentWidth)
+                    .frame(height: hover.expanded ? listHeight : 0, alignment: .top)
+                    .clipped()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.spring(response: 0.45, dampingFraction: 0.92), value: hover.expanded)
+        .onChange(of: listHeight) { NotchHoverState.shared.visibleListHeight = $0 }
     }
 }
 
@@ -289,8 +471,15 @@ struct NotchView: View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NotchPanel!
+    private var contentWrapper: NotchContentView!
     private let sideSlotWidth: CGFloat = 40  // 32pt item + 8pt inward padding
     private var statusItem: NSStatusItem!
+    private let expandedHeight: CGFloat = 320
+    private let expandedWidth: CGFloat = 480
+    private var notchBarHeight: CGFloat = 37
+    private var collapsedNotchWidth: CGFloat = 80
+    private var notchCenterX: CGFloat = 0
+    private var mouseMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hides the app from the Dock and Cmd+Tab switcher
@@ -312,6 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         ClaudeState.shared.start()
         setupStatusItem()
+        startMouseTracking()
 
         NotificationCenter.default.addObserver(
             self,
@@ -439,30 +629,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return h > 0 ? h : screen.frame.maxY - screen.visibleFrame.maxY
     }
 
-    // Returns the panel frame in screen coordinates: indicator slot | physical notch | badge slot.
-    // Falls back to a centered 64-pt panel on displays without a notch.
-    private func panelFrame(for screen: NSScreen) -> NSRect {
-        let height = notchHeight(for: screen)
+    // Panel is pre-allocated wide and tall enough for full expansion.
+    // Stores geometry for mouse-hit testing. Top edge pinned to screen top.
+    private func updateGeometry(for screen: NSScreen) {
+        notchBarHeight = notchHeight(for: screen)
         let sf = screen.frame
-        let y = sf.origin.y + sf.height - height
-
         if let left = screen.auxiliaryTopLeftArea,
            let right = screen.auxiliaryTopRightArea {
             let notchLeft  = left.maxX
             let notchRight = right.minX
-            let x = notchLeft - sideSlotWidth
-            let w = (notchRight - notchLeft) + sideSlotWidth * 2
-            return NSRect(x: x, y: y, width: w, height: height)
+            collapsedNotchWidth = (notchRight - notchLeft) + sideSlotWidth * 2
+            notchCenterX = sf.origin.x + (notchLeft + notchRight) / 2
+        } else {
+            collapsedNotchWidth = sideSlotWidth * 2
+            notchCenterX = sf.origin.x + sf.width / 2
         }
+    }
 
-        // Non-notch fallback
-        let w = sideSlotWidth * 2
-        let x = sf.origin.x + (sf.width - w) / 2
-        return NSRect(x: x, y: y, width: w, height: height)
+    private func panelFrame(for screen: NSScreen) -> NSRect {
+        let panelW = max(collapsedNotchWidth, expandedWidth)
+        let panelH = notchBarHeight + expandedHeight
+        let sf = screen.frame
+        let x = notchCenterX - panelW / 2
+        let y = sf.origin.y + sf.height - panelH
+        return NSRect(x: x, y: y, width: panelW, height: panelH)
     }
 
     private func buildPanel() {
         let screen = NSScreen.main
+        if let s = screen { updateGeometry(for: s) }
         let frame = screen.map { panelFrame(for: $0) } ?? NSRect(x: 0, y: 0, width: 64, height: 32)
         let size = frame.size
 
@@ -493,19 +688,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.sharingType = .readOnly
         panel.appearance = NSAppearance(named: .darkAqua)
 
-        let hosting = NSHostingView(rootView: NotchView())
+        contentWrapper = NotchContentView(frame: NSRect(origin: .zero, size: size))
+        contentWrapper.autoresizingMask = [.width, .height]
+        let hosting = NSHostingView(rootView: NotchView(barHeight: notchBarHeight, collapsedWidth: collapsedNotchWidth))
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
-        panel.contentView = hosting
+        contentWrapper.addSubview(hosting)
+        panel.contentView = contentWrapper
     }
 
     @objc private func screensChanged() {
+        if let s = NSScreen.main { updateGeometry(for: s) }
         centerOverNotch()
     }
 
     private func centerOverNotch() {
         guard let screen = NSScreen.main else { return }
         panel.setFrame(panelFrame(for: screen), display: false)
+    }
+
+    // MARK: - Mouse Tracking
+    //
+    // panel.ignoresMouseEvents stays true so the transparent expanded area never
+    // swallows clicks meant for apps below. We use a global monitor instead to
+    // compare the raw mouse position against the notch bar zone.
+
+    private func startMouseTracking() {
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            self?.updateHoverState()
+        }
+    }
+
+    private func updateHoverState() {
+        guard let screen = NSScreen.main else { return }
+        let loc = NSEvent.mouseLocation
+        let pf = panelFrame(for: screen)
+        let screenTop = pf.maxY
+
+        // Narrow bar zone triggers the expand
+        let barZone = NSRect(
+            x: notchCenterX - collapsedNotchWidth / 2,
+            y: screenTop - notchBarHeight,
+            width: collapsedNotchWidth,
+            height: notchBarHeight
+        )
+
+        // Full expanded pill — sized to the visible shape only
+        let visibleH = NotchHoverState.shared.visibleListHeight
+        let expandedZone = NSRect(
+            x: notchCenterX - expandedWidth / 2,
+            y: screenTop - notchBarHeight - visibleH,
+            width: expandedWidth,
+            height: notchBarHeight + visibleH
+        )
+
+        let isExpanded = NotchHoverState.shared.expanded
+        let hovering = barZone.contains(loc) || (isExpanded && expandedZone.contains(loc))
+
+        // Shrink by the outer 8pt horizontal padding and 8pt vertical list padding
+        // so hover only triggers over the actual card, not the whitespace around it.
+        let listZone = NSRect(
+            x: notchCenterX - expandedWidth / 2 + 8,
+            y: screenTop - notchBarHeight - visibleH + 8,
+            width: expandedWidth - 16,
+            height: visibleH - 16
+        )
+        let newHoveredIndex: Int?
+        let agentCount = ClaudeState.shared.agents.count
+        if isExpanded && listZone.contains(loc) && agentCount > 0 {
+            let distanceFromTop = listZone.maxY - loc.y
+            let rowHeight = listZone.height / CGFloat(agentCount)
+            let idx = Int(distanceFromTop / rowHeight)
+            newHoveredIndex = min(idx, agentCount - 1)
+        } else {
+            newHoveredIndex = nil
+        }
+        if NotchHoverState.shared.hoveredAgentIndex != newHoveredIndex {
+            DispatchQueue.main.async { NotchHoverState.shared.hoveredAgentIndex = newHoveredIndex }
+        }
+
+        // Hit rect covers only the visible black notch area in panel view coordinates
+        // (y=0 at panel bottom). When expanded, this blocks clicks on content underneath.
+        let panelH = notchBarHeight + expandedHeight
+        let newHitRect: NSRect = hovering
+            ? NSRect(x: 0, y: panelH - notchBarHeight - visibleH,
+                     width: expandedWidth, height: notchBarHeight + visibleH)
+            : .zero
+
+        let stateChanged = isExpanded != hovering
+        let hitRectChanged = contentWrapper.hitRect != newHitRect
+        guard stateChanged || hitRectChanged else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if stateChanged {
+                NotchHoverState.shared.expanded = hovering
+                self.panel.ignoresMouseEvents = !hovering
+            }
+            if hitRectChanged {
+                self.contentWrapper.hitRect = newHitRect
+            }
+        }
     }
 }
 

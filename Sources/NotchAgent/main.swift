@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import ServiceManagement
 import TelemetryClient
@@ -138,17 +139,63 @@ enum IndicatorPattern: Equatable {
     }
 }
 
+final class IndicatorAnimationState: ObservableObject {
+    @Published var workingAnimation: WorkingAnimation = WorkingAnimation.allCases.randomElement()!
+    @Published var workingHead: Int = 0
+    @Published var idleHead: Int = 0
+    @Published var awaitingIdx: Int = 0
+
+    private var bag = Set<AnyCancellable>()
+
+    init() {
+        Timer.publish(every: 0.20, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.workingHead = (self.workingHead + 1) % self.workingAnimation.path.count
+            }
+            .store(in: &bag)
+
+        Timer.publish(every: 0.38, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.idleHead = (self.idleHead + 1) % self.workingAnimation.path.count
+            }
+            .store(in: &bag)
+
+        Timer.publish(every: 0.40, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.awaitingIdx = (self.awaitingIdx + 1) % 3
+            }
+            .store(in: &bag)
+    }
+}
+
+final class IndicatorAnimationStore {
+    static let shared = IndicatorAnimationStore()
+    private var states: [String: IndicatorAnimationState] = [:]
+
+    private init() {}
+
+    func state(for key: String) -> IndicatorAnimationState {
+        if let existing = states[key] { return existing }
+        let new = IndicatorAnimationState()
+        states[key] = new
+        return new
+    }
+}
+
 struct IndicatorView: View {
     let pattern: IndicatorPattern
-    @State private var workingAnimation: WorkingAnimation = WorkingAnimation.allCases.randomElement()!
-    @State private var headIdx: Int = 0
-    @State private var awaitingIdx: Int = 0
+    @ObservedObject private var anim: IndicatorAnimationState
 
-    private static let creamColor   = Color(red: 1.0, green: 0.80, blue: 0.608)
-    private static let glowColor    = Color(red: 0.80, green: 0.55, blue: 0.25)
-    private static let ticker       = Timer.publish(every: 0.20, on: .main, in: .common).autoconnect()
-    private static let idleTicker   = Timer.publish(every: 0.38, on: .main, in: .common).autoconnect()
-    private static let awaitTicker  = Timer.publish(every: 0.40, on: .main, in: .common).autoconnect()
+    private static let creamColor = Color(red: 1.0, green: 0.80, blue: 0.608)
+    private static let glowColor  = Color(red: 0.80, green: 0.55, blue: 0.25)
+
+    init(pattern: IndicatorPattern, animKey: String) {
+        self.pattern = pattern
+        _anim = ObservedObject(wrappedValue: IndicatorAnimationStore.shared.state(for: animKey))
+    }
 
     var body: some View {
         ZStack {
@@ -168,34 +215,14 @@ struct IndicatorView: View {
                                 .fill(pattern == .working ? Self.creamColor : pattern.color)
                                 .opacity(cellOpacity(idx: idx))
                                 .frame(width: 5, height: 5)
-                                .animation(.easeInOut(duration: 0.22), value: headIdx)
-                                .animation(.easeInOut(duration: 0.22), value: awaitingIdx)
+                                .animation(.easeInOut(duration: 0.22), value: anim.workingHead)
+                                .animation(.easeInOut(duration: 0.22), value: anim.idleHead)
+                                .animation(.easeInOut(duration: 0.22), value: anim.awaitingIdx)
                         }
                     }
                 }
             }
             .frame(width: 15, height: 15)
-        }
-        .onReceive(Self.ticker) { _ in
-            guard pattern == .working else { return }
-            headIdx = (headIdx + 1) % workingAnimation.path.count
-        }
-        .onReceive(Self.idleTicker) { _ in
-            guard pattern == .idle else { return }
-            headIdx = (headIdx + 1) % workingAnimation.path.count
-        }
-        .onReceive(Self.awaitTicker) { _ in
-            guard pattern == .awaiting else { return }
-            awaitingIdx = (awaitingIdx + 1) % 3
-        }
-        .onChange(of: pattern) { newPattern in
-            if newPattern == .working {
-                workingAnimation = WorkingAnimation.allCases.randomElement()!
-                headIdx = 0
-            }
-            if newPattern == .awaiting {
-                awaitingIdx = 0
-            }
         }
     }
 
@@ -205,18 +232,29 @@ struct IndicatorView: View {
             let path = [1, 4, 7]
             let trailLen = 2
             for i in 0..<trailLen {
-                let pi = (awaitingIdx - i + path.count) % path.count
+                let pi = (anim.awaitingIdx - i + path.count) % path.count
                 if path[pi] == idx {
                     let t = Double(trailLen - 1 - i) / Double(trailLen - 1)
                     return 0.35 + t * 0.65
                 }
             }
             return 0.0
-        case .idle, .working:
-            let path = workingAnimation.path
-            let len  = workingAnimation.trailLength
+        case .idle:
+            let path = anim.workingAnimation.path
+            let len  = anim.workingAnimation.trailLength
             for i in 0..<len {
-                let pi = (headIdx - i + path.count) % path.count
+                let pi = (anim.idleHead - i + path.count) % path.count
+                if path[pi] == idx {
+                    let t = Double(len - 1 - i) / Double(len - 1)
+                    return 0.30 + t * 0.70
+                }
+            }
+            return 0.0
+        case .working:
+            let path = anim.workingAnimation.path
+            let len  = anim.workingAnimation.trailLength
+            for i in 0..<len {
+                let pi = (anim.workingHead - i + path.count) % path.count
                 if path[pi] == idx {
                     let t = Double(len - 1 - i) / Double(len - 1)
                     return 0.30 + t * 0.70
@@ -300,8 +338,8 @@ private struct AgentRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            IndicatorView(pattern: agent.pattern)
-                .frame(width: 15, height: 15)
+            IndicatorView(pattern: agent.pattern, animKey: agent.id)
+                .frame(width: 32, height: 32)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(subtitleText)
@@ -335,7 +373,9 @@ private struct AgentRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 8)
         .onTapGesture {
-            state.pinnedAgentId = isPinned ? nil : agent.id
+            withAnimation(.easeInOut(duration: 0.28)) {
+                state.pinnedAgentId = isPinned ? nil : agent.id
+            }
         }
         .onAppear { bgOpacity = isHovered ? 1 : 0 }
         .onChange(of: hover.hoveredAgentIndex) { newIndex in
@@ -426,6 +466,10 @@ struct NotchView: View {
         return state.pattern
     }
 
+    private var displayAnimKey: String {
+        state.pinnedAgentId ?? "__aggregate__"
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             // Shape animates width, height, and corner radii together
@@ -436,9 +480,14 @@ struct NotchView: View {
 
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    IndicatorView(pattern: displayPattern)
-                        .frame(width: 32, height: 32)
-                        .padding(.leading, 8)
+                    ZStack {
+                        IndicatorView(pattern: displayPattern, animKey: displayAnimKey)
+                            .id(displayAnimKey)
+                            .transition(.opacity)
+                    }
+                    .frame(width: 32, height: 32)
+                    .padding(.leading, 8)
+                    .animation(.easeInOut(duration: 0.28), value: displayAnimKey)
 
                     Spacer()
 

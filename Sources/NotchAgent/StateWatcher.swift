@@ -313,6 +313,7 @@ final class ClaudeState: ObservableObject {
             agents[idx] = entry
         } else {
             agents.append(entry)
+            if pinnedAgentId == nil { pinnedAgentId = entry.id }
         }
 
         if let path = resolvedPath {

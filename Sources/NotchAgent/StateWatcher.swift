@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import Foundation
 import Darwin
+import AppKit
 
 struct AgentEntry: Identifiable, Equatable {
     let id: String          // session_id
@@ -24,6 +25,9 @@ final class ClaudeState: ObservableObject {
     private let queue = DispatchQueue(label: "com.notchagent.socket", qos: .userInitiated)
     private var staleCancellable: AnyCancellable?
     private var processCheckCancellable: AnyCancellable?
+    private var socketHealthCancellable: AnyCancellable?
+    private var wakeObserver: NSObjectProtocol?
+    private var activityToken: NSObjectProtocol?
     // Keyed by session_id, main-thread only
     private var processWatchers: [String: DispatchSourceProcess] = [:]
     private var audioPlayer: AVAudioPlayer?
@@ -40,6 +44,13 @@ final class ClaudeState: ObservableObject {
     }
 
     func start() {
+        // Prevent App Nap: macOS throttles background apps during idle, which delays
+        // socket event delivery and coalesces timers — exactly what a monitor can't afford.
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "Monitoring Claude Code state"
+        )
+
         queue.async { [weak self] in self?.bindAndListen() }
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
 
@@ -47,9 +58,35 @@ final class ClaudeState: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in self?.cleanupStaleAgents() }
 
-        processCheckCancellable = Timer.publish(every: 20, on: .main, in: .common)
+        processCheckCancellable = Timer.publish(every: 120, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.cleanupExitedAgents() }
+
+        socketHealthCancellable = Timer.publish(every: 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.rebindSocketIfNeeded() }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in self?.handleWake() }
+    }
+
+    private func handleWake() {
+        // Force-rebuild the socket unconditionally: after sleep, kqueue subscriptions
+        // go stale silently even though fcntl still reports the fd as valid.
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.acceptSource?.cancel()
+            self.acceptSource = nil
+            if self.serverSocket >= 0 { close(self.serverSocket); self.serverSocket = -1 }
+            self.bindAndListen()
+        }
+        // Re-scan for sessions that were active during or after sleep.
+        DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
+        // Evict agents whose processes died while the Mac was asleep.
+        cleanupExitedAgents()
     }
 
     // MARK: - Startup scan (process-anchored)
@@ -157,7 +194,8 @@ final class ClaudeState: ObservableObject {
 
     // Covers crashes: file stops updating and stop_reason never appears.
     // Only removes idle agents — working/awaiting stay visible so the user
-    // can see a stuck state.
+    // can see a stuck state. Skips agents whose claude process is still running
+    // (user is just AFK).
     private func cleanupStaleAgents() {
         let cutoff = Date().addingTimeInterval(-10 * 60)
         let snapshot = agents
@@ -165,11 +203,14 @@ final class ClaudeState: ObservableObject {
         let paths = jsonlPaths
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            let runningCwds = Set(Self.runningClaudeCwds())
             var staleIds: [String] = []
             for agent in snapshot {
                 guard agent.pattern == .idle else { continue }
                 guard (activity[agent.id] ?? .distantPast) < cutoff else { continue }
                 guard let path = paths[agent.id] else { continue }
+                // If the process is still alive in this cwd, don't evict — user is just AFK.
+                if !agent.cwd.isEmpty && runningCwds.contains(agent.cwd) { continue }
                 let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date ?? .distantPast
                 if mtime < cutoff { staleIds.append(agent.id) }
             }
@@ -197,6 +238,21 @@ final class ClaudeState: ObservableObject {
     }
 
     // MARK: - Socket server
+
+    // Periodic health-check (60 s timer). Only rebinds if the socket file
+    // disappeared or the fd was closed externally. For sleep recovery use handleWake().
+    private func rebindSocketIfNeeded() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let fileExists = FileManager.default.fileExists(atPath: Self.socketPath)
+            let fdValid = self.serverSocket >= 0 && fcntl(self.serverSocket, F_GETFL) >= 0
+            guard !fileExists || !fdValid else { return }
+            self.acceptSource?.cancel()
+            self.acceptSource = nil
+            if self.serverSocket >= 0 { close(self.serverSocket); self.serverSocket = -1 }
+            self.bindAndListen()
+        }
+    }
 
     private func bindAndListen() {
         var addr = sockaddr_un()

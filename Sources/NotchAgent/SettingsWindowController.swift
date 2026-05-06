@@ -174,12 +174,88 @@ struct SoundRowView: View {
     }
 }
 
+// MARK: - Update Progress Sheet
+
+struct UpdateProgressView: View {
+    let version: String
+    @Binding var isPresented: Bool
+
+    @State private var log = ""
+    @State private var isRunning = true
+    @State private var succeeded = false
+    @State private var started = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                if isRunning {
+                    ProgressView().scaleEffect(0.75)
+                    Text("Installing v\(version)…")
+                } else if succeeded {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    Text("Update complete!")
+                } else {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                    Text("Update failed")
+                }
+                Spacer()
+            }
+            .font(.headline)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(log.isEmpty ? " " : log)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                        .id("end")
+                }
+                .frame(height: 140)
+                .background(Color(.windowBackgroundColor))
+                .cornerRadius(6)
+                .onChange(of: log) { _ in
+                    withAnimation { proxy.scrollTo("end", anchor: .bottom) }
+                }
+            }
+
+            HStack {
+                Spacer()
+                if succeeded {
+                    Button("Relaunch Now") { UpdateChecker.relaunch() }
+                        .buttonStyle(.borderedProminent)
+                } else if !isRunning {
+                    Button("Close") { isPresented = false }
+                    Button("View on GitHub") {
+                        NSWorkspace.shared.open(UpdateChecker.releasesURL)
+                        isPresented = false
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onAppear {
+            guard !started else { return }
+            started = true
+            UpdateChecker.install(version: version) { chunk in
+                log += chunk
+            } completion: { ok in
+                isRunning = false
+                succeeded = ok
+            }
+        }
+    }
+}
+
 // MARK: - General Settings
 
 struct GeneralSettingsView: View {
     @ObservedObject private var prefs = AppPreferences.shared
     @State private var launchAtLogin = false
     @State private var checkingUpdate = false
+    @State private var availableVersion: String? = nil
+    @State private var upToDate = false
+    @State private var showUpdateSheet = false
     private let hasBundle = Bundle.main.bundleIdentifier != nil
     private let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
 
@@ -244,34 +320,44 @@ struct GeneralSettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("About")
                     .font(.headline)
-            HStack {
-                Text("v\(currentVersion)")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
-                Spacer()
-                Button(checkingUpdate ? "Checking…" : "Check for Updates") {
-                    checkingUpdate = true
-                    UpdateChecker.check { version in
-                        checkingUpdate = false
-                        let alert = NSAlert()
-                        if let version {
-                            alert.messageText = "Update Available"
-                            alert.informativeText = "Version \(version) is available. You have \(currentVersion)."
-                            alert.addButton(withTitle: "Update")
-                            alert.addButton(withTitle: "Cancel")
-                            if alert.runModal() == .alertFirstButtonReturn {
-                                NSWorkspace.shared.open(UpdateChecker.releasesURL)
+                HStack {
+                    Text("v\(currentVersion)")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                    Spacer()
+                    if let version = availableVersion {
+                        Button("Update to v\(version)") { showUpdateSheet = true }
+                            .buttonStyle(.borderedProminent)
+                    } else if upToDate {
+                        Text("Up to date ✓")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Button(checkingUpdate ? "Checking…" : "Check for Updates") {
+                            checkingUpdate = true
+                            availableVersion = nil
+                            upToDate = false
+                            UpdateChecker.check { version in
+                                checkingUpdate = false
+                                if let version {
+                                    availableVersion = version
+                                } else {
+                                    upToDate = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                        upToDate = false
+                                    }
+                                }
                             }
-                        } else {
-                            alert.messageText = "You're up to date"
-                            alert.informativeText = "NotchAgent \(currentVersion) is the latest version."
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
                         }
+                        .disabled(checkingUpdate)
                     }
                 }
-                .disabled(checkingUpdate)
             }
+            .sheet(isPresented: $showUpdateSheet) {
+                if let version = availableVersion {
+                    UpdateProgressView(version: version, isPresented: $showUpdateSheet)
+                        .onDisappear { availableVersion = nil }
+                }
             }
 
         }
@@ -318,6 +404,57 @@ final class UpdateChecker {
                 completion(isNewer(remote, than: current) ? remote : nil)
             }
         }.resume()
+    }
+
+    static func install(version: String, progress: @escaping (String) -> Void, completion: @escaping (Bool) -> Void) {
+        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("notchagent-update")
+        let script = """
+        set -e
+        rm -rf '\(tmpDir)'
+        git clone --depth 1 --branch 'v\(version)' https://github.com/TeamNoSleepz/notch-agent.git '\(tmpDir)'
+        bash '\(tmpDir)/scripts/bundle.sh'
+        rm -rf '\(tmpDir)'
+        """
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = ["-c", script]
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/bin:/sbin:/usr/sbin"
+            task.environment = env
+
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+
+            pipe.fileHandleForReading.readabilityHandler = { fh in
+                let data = fh.availableData
+                if let str = String(data: data, encoding: .utf8), !str.isEmpty {
+                    DispatchQueue.main.async { progress(str) }
+                }
+            }
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+                pipe.fileHandleForReading.readabilityHandler = nil
+                DispatchQueue.main.async { completion(task.terminationStatus == 0) }
+            } catch {
+                DispatchQueue.main.async {
+                    progress("Error: \(error.localizedDescription)\n")
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    static func relaunch() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 0.5 && open /Applications/NotchAgent.app"]
+        try? task.run()
+        NSApp.terminate(nil)
     }
 
     private static func isNewer(_ a: String, than b: String) -> Bool {

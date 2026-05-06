@@ -34,6 +34,7 @@ final class ClaudeState: ObservableObject {
     // Both keyed by session_id, all accessed on main thread only
     private var jsonlPaths: [String: String] = [:]
     private var lastActivityDate: [String: Date] = [:]
+    private var jsonlWatchers: [String: JSONLWatcher] = [:]
 
     private struct HookEvent: Decodable {
         let session_id: String
@@ -374,6 +375,9 @@ final class ClaudeState: ObservableObject {
 
         if let path = resolvedPath {
             jsonlPaths[entry.id] = path
+            if jsonlWatchers[entry.id] == nil {
+                startJSONLWatcher(sessionId: entry.id, path: path)
+            }
         }
 
         if let pid, processWatchers[entry.id] == nil {
@@ -405,6 +409,7 @@ final class ClaudeState: ObservableObject {
         lastActivityDate.removeValue(forKey: id)
         jsonlPaths.removeValue(forKey: id)
         cancelProcessWatcher(for: id)
+        stopJSONLWatcher(sessionId: id)
         refreshGlobal(prev: prev)
     }
 
@@ -420,6 +425,75 @@ final class ClaudeState: ObservableObject {
         if agents.contains(where: { $0.pattern == .working }) { return .working }
         if agents.contains(where: { $0.pattern == .awaiting }) { return .awaiting }
         return .idle
+    }
+
+    // MARK: - JSONL File Watching
+
+    // Watches the session transcript file for writes. Any new content that doesn't
+    // contain end_turn means Claude is actively processing — catches hook events that
+    // are silently dropped before they reach the socket.
+    private final class JSONLWatcher {
+        let source: DispatchSourceFileSystemObject
+        let handle: FileHandle
+        var offset: UInt64
+
+        init(source: DispatchSourceFileSystemObject, handle: FileHandle, offset: UInt64) {
+            self.source = source
+            self.handle = handle
+            self.offset = offset
+        }
+
+        deinit { source.cancel() }
+    }
+
+    private func startJSONLWatcher(sessionId: String, path: String) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        let initialOffset = (try? handle.seekToEnd()) ?? 0
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: handle.fileDescriptor,
+            eventMask: [.write, .extend],
+            queue: .main
+        )
+        let watcher = JSONLWatcher(source: source, handle: handle, offset: initialOffset)
+        jsonlWatchers[sessionId] = watcher
+        source.setEventHandler { [weak self] in self?.handleJSONLWrite(sessionId: sessionId) }
+        source.setCancelHandler { try? handle.close() }
+        source.resume()
+    }
+
+    private func stopJSONLWatcher(sessionId: String) {
+        jsonlWatchers.removeValue(forKey: sessionId)  // deinit cancels source and closes handle
+    }
+
+    private func handleJSONLWrite(sessionId: String) {
+        guard let watcher = jsonlWatchers[sessionId] else { return }
+        guard let size = try? watcher.handle.seekToEnd(), size > watcher.offset,
+              let _ = try? watcher.handle.seek(toOffset: watcher.offset),
+              let data = try? watcher.handle.readToEnd(),
+              let text = String(data: data, encoding: .utf8) else { return }
+        watcher.offset = size
+
+        guard let idx = agents.firstIndex(where: { $0.id == sessionId }) else { return }
+        let current = agents[idx]
+        let prev = pattern
+
+        let hasEndTurn = text.contains("\"stop_reason\":\"end_turn\"") ||
+                         text.contains("\"stop_reason\": \"end_turn\"")
+        // Only treat a write as "Claude started working" when it contains a real user
+        // message — not metadata entries (last-prompt, ai-title, permission-mode) that
+        // Claude Code appends after end_turn.
+        let hasUserMessage = text.contains("\"type\":\"user\"")
+
+        if hasEndTurn {
+            guard current.pattern != .idle else { return }
+            agents[idx] = AgentEntry(id: current.id, cwd: current.cwd, pattern: .idle, tool: nil)
+        } else if hasUserMessage && current.pattern == .idle {
+            agents[idx] = AgentEntry(id: current.id, cwd: current.cwd, pattern: .working, tool: nil)
+        } else {
+            return
+        }
+        lastActivityDate[sessionId] = Date()
+        refreshGlobal(prev: prev)
     }
 
     // MARK: - Sound

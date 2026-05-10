@@ -558,6 +558,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSystemWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
     }
 
     // MARK: - Status Item
@@ -766,6 +773,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
             self?.updateHoverState()
         }
+    }
+
+    @objc private func handleSystemWake() {
+        // Global mouse monitors can silently drop events after wake; restart to guarantee delivery.
+        if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor) }
+        startMouseTracking()
     }
 
     private func updateHoverState() {

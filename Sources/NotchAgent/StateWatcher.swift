@@ -26,8 +26,10 @@ final class ClaudeState: ObservableObject {
     private var staleCancellable: AnyCancellable?
     private var processCheckCancellable: AnyCancellable?
     private var socketHealthCancellable: AnyCancellable?
+    private var jsonlHealthCancellable: AnyCancellable?
     private var wakeObserver: NSObjectProtocol?
     private var activityToken: NSObjectProtocol?
+    private var lastSocketEventDate = Date()
     // Keyed by session_id, main-thread only
     private var processWatchers: [String: DispatchSourceProcess] = [:]
     private var audioPlayer: AVAudioPlayer?
@@ -67,6 +69,10 @@ final class ClaudeState: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in self?.rebindSocketIfNeeded() }
 
+        jsonlHealthCancellable = Timer.publish(every: 5 * 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.periodicHealthCheck() }
+
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -75,6 +81,7 @@ final class ClaudeState: ObservableObject {
     }
 
     private func handleWake() {
+        lastSocketEventDate = Date()  // reset so rebindSocketIfNeeded doesn't double-fire
         // Force-rebuild the socket unconditionally: after sleep, kqueue subscriptions
         // go stale silently even though fcntl still reports the fd as valid.
         queue.async { [weak self] in
@@ -83,6 +90,13 @@ final class ClaudeState: ObservableObject {
             self.acceptSource = nil
             if self.serverSocket >= 0 { close(self.serverSocket); self.serverSocket = -1 }
             self.bindAndListen()
+        }
+        // Rebuild JSONL watchers — DispatchSourceFileSystemObject is also kqueue-backed
+        // and goes stale silently after sleep just like the socket.
+        let paths = jsonlPaths
+        for (sessionId, path) in paths {
+            stopJSONLWatcher(sessionId: sessionId)
+            startJSONLWatcher(sessionId: sessionId, path: path)
         }
         // Re-scan for sessions that were active during or after sleep.
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
@@ -240,19 +254,37 @@ final class ClaudeState: ObservableObject {
 
     // MARK: - Socket server
 
-    // Periodic health-check (60 s timer). Only rebinds if the socket file
-    // disappeared or the fd was closed externally. For sleep recovery use handleWake().
+    // Periodic health-check (60 s timer). Rebinds if the socket file disappeared or the fd
+    // was closed externally. For the silent-death case (kqueue stopped delivering events),
+    // process listing runs on a utility queue — never on the socket queue — so a slow lsof
+    // call can't block the accept loop and drop a SessionStart hook that fires concurrently.
     private func rebindSocketIfNeeded() {
+        let lastEvent = lastSocketEventDate
         queue.async { [weak self] in
             guard let self else { return }
             let fileExists = FileManager.default.fileExists(atPath: Self.socketPath)
             let fdValid = self.serverSocket >= 0 && fcntl(self.serverSocket, F_GETFL) >= 0
-            guard !fileExists || !fdValid else { return }
-            self.acceptSource?.cancel()
-            self.acceptSource = nil
-            if self.serverSocket >= 0 { close(self.serverSocket); self.serverSocket = -1 }
-            self.bindAndListen()
+            if !fileExists || !fdValid {
+                self.doRebind()
+                return
+            }
+            // Silent-death check: if no event in 5 min, verify claude is actually running
+            // before rebuilding. Do the process listing off the socket queue so lsof can't
+            // stall accepts and cause SessionStart hooks to time out and be dropped.
+            guard Date().timeIntervalSince(lastEvent) > 5 * 60 else { return }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self, !Self.runningClaudeCwds().isEmpty else { return }
+                self.queue.async { self.doRebind() }
+            }
         }
+    }
+
+    private func doRebind() {
+        acceptSource?.cancel()
+        acceptSource = nil
+        if serverSocket >= 0 { close(serverSocket); serverSocket = -1 }
+        bindAndListen()
+        DispatchQueue.main.async { self.lastSocketEventDate = Date() }
     }
 
     private func bindAndListen() {
@@ -328,6 +360,7 @@ final class ClaudeState: ObservableObject {
         close(client)
 
         guard let event = try? JSONDecoder().decode(HookEvent.self, from: data) else { return }
+        DispatchQueue.main.async { [weak self] in self?.lastSocketEventDate = Date() }
 
         if event.status == "ended" {
             let sid = event.session_id
@@ -463,6 +496,30 @@ final class ClaudeState: ObservableObject {
 
     private func stopJSONLWatcher(sessionId: String) {
         jsonlWatchers.removeValue(forKey: sessionId)  // deinit cancels source and closes handle
+    }
+
+    // Periodic 5-min health pass. Two jobs:
+    // 1. Rebuild JSONL watchers — fixes kqueue going silently stale during extended runtime.
+    //    Also recovers offset drift: bytes written while kqueue was dead are processed now.
+    // 2. Re-run startupScan — catches new Claude sessions whose first hook was dropped
+    //    during a brief socket gap (e.g., a proactive rebind or transient kqueue miss).
+    private func periodicHealthCheck() {
+        // Rebuild JSONL watchers
+        let snapshot = jsonlPaths
+        for (sessionId, path) in snapshot {
+            let missedOffset = jsonlWatchers[sessionId]?.offset
+            stopJSONLWatcher(sessionId: sessionId)
+            startJSONLWatcher(sessionId: sessionId, path: path)
+            if let missed = missedOffset,
+               let watcher = jsonlWatchers[sessionId],
+               let currentSize = try? watcher.handle.seekToEnd(),
+               currentSize > missed {
+                watcher.offset = missed
+                handleJSONLWrite(sessionId: sessionId)
+            }
+        }
+        // Re-scan for new sessions
+        DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
     }
 
     private func handleJSONLWrite(sessionId: String) {

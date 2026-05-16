@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 
 SOCKET_PATH = "/tmp/notch-agent.sock"
 
@@ -34,14 +35,20 @@ def find_claude_pid():
 
 
 def send_event(state):
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(SOCKET_PATH)
-        sock.sendall(json.dumps(state).encode())
-        sock.close()
-    except (socket.error, OSError):
-        pass
+    # Retry up to 5 times with backoff. Handles the window where the socket is being
+    # rebuilt after wake — SessionStart fires exactly once and must not be dropped.
+    payload = json.dumps(state).encode()
+    for attempt in range(5):
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            sock.connect(SOCKET_PATH)
+            sock.sendall(payload)
+            sock.close()
+            return
+        except (socket.error, OSError):
+            if attempt < 4:
+                time.sleep(0.3)
 
 
 def main():

@@ -27,9 +27,11 @@ final class ClaudeState: ObservableObject {
     private var processCheckCancellable: AnyCancellable?
     private var socketHealthCancellable: AnyCancellable?
     private var jsonlHealthCancellable: AnyCancellable?
+    private var sessionScanCancellable: AnyCancellable?
     private var wakeObserver: NSObjectProtocol?
     private var activityToken: NSObjectProtocol?
     private var lastSocketEventDate = Date()
+    private var lastJSONLEventDate = Date()
     // Keyed by session_id, main-thread only
     private var processWatchers: [String: DispatchSourceProcess] = [:]
     private var audioPlayer: AVAudioPlayer?
@@ -69,9 +71,21 @@ final class ClaudeState: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in self?.rebindSocketIfNeeded() }
 
+        // JSONL watcher rebuild — fixes kqueue staleness, runs less often (expensive)
         jsonlHealthCancellable = Timer.publish(every: 5 * 60, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] _ in self?.periodicHealthCheck() }
+            .sink { [weak self] _ in self?.rebuildJSONLWatchers() }
+
+        // New-session scan — catches agents whose SessionStart hook was dropped.
+        // Cheap ps-only pre-check avoids lsof when no claude processes are running.
+        sessionScanCancellable = Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    guard Self.claudeIsRunning() else { return }
+                    self?.startupScan()
+                }
+            }
 
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -98,8 +112,14 @@ final class ClaudeState: ObservableObject {
             stopJSONLWatcher(sessionId: sessionId)
             startJSONLWatcher(sessionId: sessionId, path: path)
         }
-        // Re-scan for sessions that were active during or after sleep.
-        DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
+        // Re-scan at increasing intervals after wake. Covers sessions active before sleep
+        // and new sessions launched right after wake before the socket was ready.
+        // The 30s session scan timer also kicks in, so this just fills the early gaps.
+        for delay in [0.0, 3.0, 8.0, 20.0, 45.0] {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.startupScan()
+            }
+        }
         // Evict agents whose processes died while the Mac was asleep.
         cleanupExitedAgents()
     }
@@ -141,43 +161,71 @@ final class ClaudeState: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             for item in found {
+                // Already tracked by session ID — don't override current state with .idle
+                if self.agents.contains(where: { $0.id == item.sessionId }) { continue }
+                // Already tracked by cwd with a different session ID (stale scan result) — skip
+                if self.agents.contains(where: { $0.cwd == item.cwd && $0.id != item.sessionId }) { continue }
                 let entry = AgentEntry(id: item.sessionId, cwd: item.cwd, pattern: .idle, tool: nil)
                 self.upsertAgent(entry, knownJsonlPath: item.path)
             }
         }
     }
 
-    // Get cwds of all running claude processes in one ps + lsof round-trip.
-    private static func runningClaudeCwds() -> [String] {
-        let psTask = Process()
-        psTask.launchPath = "/bin/ps"
-        psTask.arguments = ["-A", "-o", "pid=,tty=,comm="]
-        let psPipe = Pipe()
-        psTask.standardOutput = psPipe
-        psTask.standardError = Pipe()
-        try? psTask.run()
-        psTask.waitUntilExit()
+    // Cheap check: returns true if any claude process is running.
+    // Use this before calling runningClaudeCwds() to avoid lsof when unnecessary.
+    private static func claudeIsRunning() -> Bool {
+        let task = Process()
+        task.launchPath = "/usr/bin/pgrep"
+        task.arguments = ["-x", "claude"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        try? task.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return task.terminationStatus == 0 && !data.isEmpty
+    }
 
-        let psOutput = String(data: psPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let pids = psOutput.components(separatedBy: .newlines).compactMap { line -> Int? in
-            let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-            // pid= tty= comm= — skip daemon processes that have no controlling terminal
-            guard parts.count >= 3, parts[2] == "claude", parts[1] != "??",
-                  let pid = Int(parts[0]) else { return nil }
-            return pid
-        }
+    // Get cwds of all running claude processes in one pgrep + lsof round-trip.
+    private static func runningClaudeCwds() -> [String] {
+        // pgrep -x claude: exact name match, foreground processes only (has tty)
+        // Output is just PIDs, one per line — tiny, no pipe-buffer deadlock risk.
+        let pgrepTask = Process()
+        pgrepTask.launchPath = "/usr/bin/pgrep"
+        pgrepTask.arguments = ["-x", "claude"]
+        let pgrepPipe = Pipe()
+        pgrepTask.standardOutput = pgrepPipe
+        pgrepTask.standardError = Pipe()
+        try? pgrepTask.run()
+        // Read BEFORE waitUntilExit to avoid pipe-buffer deadlock on large output
+        let pgrepData = pgrepPipe.fileHandleForReading.readDataToEndOfFile()
+        pgrepTask.waitUntilExit()
+
+        let pids = (String(data: pgrepData, encoding: .utf8) ?? "")
+            .components(separatedBy: .newlines)
+            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
         guard !pids.isEmpty else { return [] }
 
         let lsofTask = Process()
-        lsofTask.launchPath = "/usr/bin/lsof"
+        lsofTask.launchPath = "/usr/sbin/lsof"
         lsofTask.arguments = ["-p", pids.map(String.init).joined(separator: ","), "-a", "-d", "cwd", "-Fn"]
         let lsofPipe = Pipe()
         lsofTask.standardOutput = lsofPipe
         lsofTask.standardError = Pipe()
-        try? lsofTask.run()
+        do { try lsofTask.run() } catch {
+            return []
+        }
+        // lsof can hang post-wake while macOS reinitializes the vnode table.
+        // Kill after 3s with SIGKILL (SIGTERM can be ignored while lsof waits on vfs).
+        let killTimer = DispatchWorkItem { kill(lsofTask.processIdentifier, SIGKILL) }
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 3, execute: killTimer)
+        // Read pipe before waitUntilExit: pipe EOF unblocks when lsof exits/is killed,
+        // guaranteeing this call returns within 3s even if lsof ignores signals.
+        let lsofData = lsofPipe.fileHandleForReading.readDataToEndOfFile()
         lsofTask.waitUntilExit()
+        killTimer.cancel()
 
-        let lsofOutput = String(data: lsofPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let lsofOutput = String(data: lsofData, encoding: .utf8) ?? ""
         return Array(Set(
             lsofOutput.components(separatedBy: .newlines).compactMap { line -> String? in
                 guard line.hasPrefix("n") else { return nil }
@@ -217,8 +265,20 @@ final class ClaudeState: ObservableObject {
         let activity = lastActivityDate
         let paths = jsonlPaths
 
+        // Skip process listing entirely if there are no idle agents past the cutoff.
+        // Avoids a ps+lsof wakeup every 30s when nothing needs cleaning.
+        let hasCandidates = snapshot.contains { agent in
+            agent.pattern == .idle
+            && (activity[agent.id] ?? .distantPast) < cutoff
+            && paths[agent.id] != nil
+        }
+        guard hasCandidates else { return }
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let runningCwds = Set(Self.runningClaudeCwds())
+            // Empty result means lsof likely timed out — skip eviction to avoid
+            // incorrectly removing agents whose processes are actually still running.
+            guard !runningCwds.isEmpty else { return }
             var staleIds: [String] = []
             for agent in snapshot {
                 guard agent.pattern == .idle else { continue }
@@ -244,6 +304,12 @@ final class ClaudeState: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let runningCwds = Set(Self.runningClaudeCwds())
+            // If lsof returned nothing, it likely timed out (e.g. post-wake vnode table
+            // reinit). Treat empty result as "unknown" — don't evict, risk is false
+            // retention not false eviction.
+            guard !runningCwds.isEmpty else {
+                return
+            }
             let deadIds = snapshot.filter { !runningCwds.contains($0.cwd) }.map { $0.id }
             guard !deadIds.isEmpty else { return }
             DispatchQueue.main.async { [weak self] in
@@ -254,12 +320,18 @@ final class ClaudeState: ObservableObject {
 
     // MARK: - Socket server
 
-    // Periodic health-check (60 s timer). Rebinds if the socket file disappeared or the fd
-    // was closed externally. For the silent-death case (kqueue stopped delivering events),
-    // process listing runs on a utility queue — never on the socket queue — so a slow lsof
-    // call can't block the accept loop and drop a SessionStart hook that fires concurrently.
+    // Periodic health-check (60 s timer). Rebinds if the socket file disappeared, the fd
+    // was closed externally, or kqueue silently stopped delivering events.
+    //
+    // Two dead-socket signals:
+    // 1. JSONL activity but no socket events for 60s — Claude is writing to disk but hooks
+    //    aren't arriving. Socket is dead. Rebuild immediately (catches missed permission prompts).
+    // 2. No socket events for 5 min AND claude running — general silent-death fallback.
+    //
+    // Process listing always runs off the socket queue so lsof can't block accepts.
     private func rebindSocketIfNeeded() {
-        let lastEvent = lastSocketEventDate
+        let lastSocket = lastSocketEventDate
+        let lastJSONL = lastJSONLEventDate
         queue.async { [weak self] in
             guard let self else { return }
             let fileExists = FileManager.default.fileExists(atPath: Self.socketPath)
@@ -268,10 +340,14 @@ final class ClaudeState: ObservableObject {
                 self.doRebind()
                 return
             }
-            // Silent-death check: if no event in 5 min, verify claude is actually running
-            // before rebuilding. Do the process listing off the socket queue so lsof can't
-            // stall accepts and cause SessionStart hooks to time out and be dropped.
-            guard Date().timeIntervalSince(lastEvent) > 5 * 60 else { return }
+            let socketSilent = Date().timeIntervalSince(lastSocket)
+            // Signal 1: JSONL active but socket silent for 60s → dead socket
+            if socketSilent > 60 && Date().timeIntervalSince(lastJSONL) < 30 {
+                self.doRebind()
+                return
+            }
+            // Signal 2: general 5-min silent-death fallback
+            guard socketSilent > 5 * 60 else { return }
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self, !Self.runningClaudeCwds().isEmpty else { return }
                 self.queue.async { self.doRebind() }
@@ -399,6 +475,13 @@ final class ClaudeState: ObservableObject {
 
         let resolvedPath = knownJsonlPath ?? (entry.cwd.isEmpty ? nil : Self.jsonlPath(sessionId: entry.id, cwd: entry.cwd))
 
+        // Remove stale entry for same cwd with different session ID — happens when startupScan
+        // guessed the wrong JSONL and the real hook now arrives with the actual session ID.
+        if !entry.cwd.isEmpty {
+            let staleIds = agents.filter { $0.id != entry.id && $0.cwd == entry.cwd }.map { $0.id }
+            for sid in staleIds { removeAgent(id: sid) }
+        }
+
         if let idx = agents.firstIndex(where: { $0.id == entry.id }) {
             agents[idx] = entry
         } else {
@@ -498,13 +581,10 @@ final class ClaudeState: ObservableObject {
         jsonlWatchers.removeValue(forKey: sessionId)  // deinit cancels source and closes handle
     }
 
-    // Periodic 5-min health pass. Two jobs:
-    // 1. Rebuild JSONL watchers — fixes kqueue going silently stale during extended runtime.
-    //    Also recovers offset drift: bytes written while kqueue was dead are processed now.
-    // 2. Re-run startupScan — catches new Claude sessions whose first hook was dropped
-    //    during a brief socket gap (e.g., a proactive rebind or transient kqueue miss).
-    private func periodicHealthCheck() {
-        // Rebuild JSONL watchers
+    // Rebuilds all active JSONL watchers (5-min timer). Fixes kqueue going silently stale
+    // during extended runtime. Also recovers offset drift: bytes written while kqueue was
+    // dead are processed immediately on rebuild.
+    private func rebuildJSONLWatchers() {
         let snapshot = jsonlPaths
         for (sessionId, path) in snapshot {
             let missedOffset = jsonlWatchers[sessionId]?.offset
@@ -518,11 +598,10 @@ final class ClaudeState: ObservableObject {
                 handleJSONLWrite(sessionId: sessionId)
             }
         }
-        // Re-scan for new sessions
-        DispatchQueue.global(qos: .utility).async { [weak self] in self?.startupScan() }
     }
 
     private func handleJSONLWrite(sessionId: String) {
+        lastJSONLEventDate = Date()
         guard let watcher = jsonlWatchers[sessionId] else { return }
         guard let size = try? watcher.handle.seekToEnd(), size > watcher.offset,
               let _ = try? watcher.handle.seek(toOffset: watcher.offset),

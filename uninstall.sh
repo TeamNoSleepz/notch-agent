@@ -61,5 +61,12 @@ fi
 # 4. Clean up tmp files
 rm -f /tmp/notch-agent /tmp/notch-agent-log
 
+# 5. Remove install dir (curl installs only)
+if [ -d "$HOME/.notch-agent" ]; then
+    echo "Removing $HOME/.notch-agent..."
+    rm -rf "$HOME/.notch-agent"
+    echo "  Done."
+fi
+
 echo ""
 echo "=== Done. NotchAgent has been removed. ==="

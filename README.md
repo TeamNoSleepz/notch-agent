@@ -32,17 +32,18 @@ xcode-select --install  # skip if already installed
 ```
 
 ```bash
-git clone https://github.com/TeamNoSleepz/notch-agent
-cd notch-agent
-./setup.sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/TeamNoSleepz/notch-agent/main/install.sh)"
 ```
 
 Open `/Applications/NotchAgent.app`, then click the menu bar icon → enable **Launch at Login**.
 
-### What `setup.sh` does
+### What the installer does
 
-1. Builds a release binary, wraps it into `NotchAgent.app`, installs to `/Applications`
-2. Injects Claude Code hooks into `~/.claude/settings.json` — 8 events pointing at `hooks/notch-agent-hook.py`
+1. Clones the repo to `~/.notch-agent`
+2. Builds a release binary, wraps it into `NotchAgent.app`, installs to `/Applications`
+3. Injects Claude Code hooks into `~/.claude/settings.json` — 8 events pointing at `~/.notch-agent/hooks/notch-agent-hook.py`
+
+Running the installer again updates to the latest version.
 
 ---
 
@@ -68,10 +69,10 @@ Click the menu bar icon → **Settings**:
 ## Uninstall
 
 ```bash
-./uninstall.sh
+~/.notch-agent/uninstall.sh
 ```
 
-Removes hooks from `~/.claude/settings.json`, deletes `/Applications/NotchAgent.app`, and cleans up `/tmp/notch-agent*`.
+Removes hooks from `~/.claude/settings.json`, deletes `/Applications/NotchAgent.app`, removes `~/.notch-agent`, and cleans up `/tmp/notch-agent*`.
 
 > [!WARNING]
 > Run `uninstall.sh` **before** deleting the repo. If you delete the repo first, the dead hook paths in `~/.claude/settings.json` will cause errors on every Claude session. Fix by removing the `notch-agent-hook` entries manually from that file.

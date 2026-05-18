@@ -2,10 +2,9 @@
   <img src="docs/assets/readme-icon.png" width="128" />
   <h1>NotchAgent</h1>
   <p>Live Claude Code status indicator inside your MacBook's notch.</p>
-
-  ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
-  ![License](https://img.shields.io/badge/license-MIT-blue)
-  ![Swift](https://img.shields.io/badge/swift-5.9-orange)
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey" />
+  <img src="https://img.shields.io/badge/license-MIT-blue" />
+  <img src="https://img.shields.io/badge/swift-5.9-orange" />
 </div>
 
 ---
@@ -25,7 +24,7 @@ While Claude is thinking, running tools, or waiting for input, a pixel grid anim
 
 ## Install
 
-**Requirements:** macOS 13+, Xcode Command Line Tools
+**Requirements:** macOS 13+, [Claude Code](https://claude.ai/code), Xcode Command Line Tools
 
 ```bash
 xcode-select --install  # skip if already installed
@@ -181,4 +180,4 @@ Issues and PRs welcome. For large changes, open an issue first to discuss.
 
 ## License
 
-MIT
+[MIT](LICENSE)

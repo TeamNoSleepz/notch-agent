@@ -6,3 +6,7 @@ _tauri_attempt/src-tauri/target/
 *.o
 *.d
 *.swp
+.agents/
+skills-lock.json
+docs/superpowers/
+.vscode/

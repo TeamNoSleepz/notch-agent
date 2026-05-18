@@ -56,8 +56,3 @@ EOF
 codesign --force --deep --sign - "$BUNDLE" 2>/dev/null || true
 
 echo "✓ Bundle created: $BUNDLE"
-
-# Install to /Applications
-rm -rf /Applications/NotchAgent.app
-cp -r "$BUNDLE" /Applications/NotchAgent.app
-echo "✓ Installed to /Applications/NotchAgent.app"

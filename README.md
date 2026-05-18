@@ -75,7 +75,7 @@ Click the menu bar icon → **Settings**:
 Removes hooks from `~/.claude/settings.json`, deletes `/Applications/NotchAgent.app`, removes `~/.notch-agent`, and cleans up `/tmp/notch-agent*`.
 
 > [!WARNING]
-> Run `uninstall.sh` **before** deleting the repo. If you delete the repo first, the dead hook paths in `~/.claude/settings.json` will cause errors on every Claude session. Fix by removing the `notch-agent-hook` entries manually from that file.
+> If you installed manually (git clone), run `uninstall.sh` before deleting the repo. Dead hook paths in `~/.claude/settings.json` cause errors on every Claude session. Fix by removing `notch-agent-hook` entries manually from that file.
 
 ---
 
@@ -140,7 +140,7 @@ Auto-rebuild on file changes:
 ./dev.sh
 ```
 
-Build the `.app` bundle without installing:
+Build the `.app` bundle only (no install):
 
 ```bash
 ./scripts/bundle.sh
@@ -164,7 +164,8 @@ notch-agent/
 ├── scripts/
 │   ├── bundle.sh                       # Creates NotchAgent.app bundle
 │   └── install.sh                      # bundle.sh + copy to /Applications
-├── setup.sh                            # One-command install + hook wiring
+├── install.sh                          # curl one-liner entry point
+├── setup.sh                            # Build, install app, wire hooks
 ├── uninstall.sh                        # Full cleanup
 ├── dev.sh                              # Auto-rebuild on file changes
 └── Package.swift

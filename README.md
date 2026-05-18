@@ -1,22 +1,25 @@
-# NotchAgent
+<div align="center">
+  <img src="Sources/NotchAgent/Resources/AppIcon.png" width="128" />
+  <h1>NotchAgent</h1>
+  <p>Live Claude Code status indicator inside your MacBook's notch.</p>
 
-A lightweight macOS menu bar app that turns your MacBook's notch into a live Claude Code status indicator.
-
-While Claude is thinking, running tools, or waiting for input, a 3×3 pixel grid animates inside your notch so you always know what's happening — without switching to the terminal.
+  ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
+  ![License](https://img.shields.io/badge/license-MIT-blue)
+  ![Swift](https://img.shields.io/badge/swift-5.9-orange)
+</div>
 
 ---
 
-## What it looks like
+<video src="https://github.com/user-attachments/assets/359a03e8-ba55-4dbc-af5b-9f76d82b5916" autoplay loop muted playsinline></video>
 
-A slim panel sits flush inside the physical notch. Three states:
+---
 
-| State | Animation | Color | Preview |
-|---|---|---|---|
-| **Idle** | Slow animated trail | Grey | ![Idle](docs/assets/notch-idle.png) |
-| **Working** | Animated trail with glow | Cream + orange glow | ![Working](docs/assets/notch-working.png) |
-| **Awaiting input** | Trail cycling down center column | Red | ![Awaiting](docs/assets/notch-awaiting.png) |
+While Claude is thinking, running tools, or waiting for input, a pixel grid animates inside your notch — so you always know what's happening without switching to the terminal.
 
-The right side of the notch shows a live count of running `claude` processes. The menu bar item opens status and settings.
+- Three states: **idle**, **working**, **awaiting input** — each with distinct animation and color
+- Live count of running `claude` processes on the right side of the notch
+- Optional sound alerts when Claude finishes or needs your attention
+- Zero screen real estate used — lives entirely inside the hardware notch
 
 ---
 
@@ -34,12 +37,63 @@ cd notch-agent
 ./setup.sh
 ```
 
-Open `/Applications/NotchAgent.app`, then click the menu bar icon and enable **Launch at Login**.
+Open `/Applications/NotchAgent.app`, then click the menu bar icon → enable **Launch at Login**.
 
 ### What `setup.sh` does
 
-1. Builds a release binary with `swift build -c release`, wraps it into `NotchAgent.app`, and installs it to `/Applications`
+1. Builds a release binary, wraps it into `NotchAgent.app`, installs to `/Applications`
 2. Injects Claude Code hooks into `~/.claude/settings.json` — 8 events pointing at `hooks/notch-agent-hook.py`
+
+---
+
+## States
+
+| State | Animation | Color |
+|---|---|---|
+| **Idle** | Slow animated trail | Grey |
+| **Working** | Animated trail with glow | Cream + orange glow |
+| **Awaiting input** | Trail cycling down center column | Red |
+
+---
+
+## Settings
+
+Click the menu bar icon → **Settings**:
+
+- **Color palette** — Default (cream/red/grey)
+- **Sounds** — chime when Claude interrupts you or finishes a task
+
+---
+
+## Uninstall
+
+```bash
+./uninstall.sh
+```
+
+Removes hooks from `~/.claude/settings.json`, deletes `/Applications/NotchAgent.app`, and cleans up `/tmp/notch-agent*`.
+
+> [!WARNING]
+> Run `uninstall.sh` **before** deleting the repo. If you delete the repo first, the dead hook paths in `~/.claude/settings.json` will cause errors on every Claude session. Fix by removing the `notch-agent-hook` entries manually from that file.
+
+---
+
+## FAQ
+
+**Does this work on Macs without a notch?**
+No — the notch panel requires the physical notch cutout. MacBooks from 2021 and later have it.
+
+**Does it work on external displays?**
+The notch panel only appears on the built-in display. The menu bar icon and process count work on any display.
+
+**Why does install require Xcode Command Line Tools?**
+NotchAgent is built from source using Swift. Xcode Command Line Tools provides the Swift compiler — it's a ~500MB download but you likely already have it.
+
+**Does it affect performance?**
+No. The app is a lightweight SwiftUI panel with no background polling — it only reacts to hook events fired by Claude Code.
+
+**The hook events stopped firing after sleep. What do I do?**
+Restart NotchAgent from the menu bar icon. A known limitation of the Unix socket after system sleep on some macOS versions.
 
 ---
 
@@ -69,30 +123,7 @@ Notch panel + menu bar icon
 
 **Notch panel** — an `NSPanel` at `mainMenu + 3` window level, sized to the physical notch using `auxiliaryTopLeftArea` / `auxiliaryTopRightArea`. Mouse events pass through.
 
-**Indicator** — 3×3 grid of 5×5pt cells. Five animation patterns (snake, single horizontal, single vertical, staggering horizontal, staggering vertical) — one picked randomly each time Claude starts working.
-
----
-
-## Settings
-
-Click the menu bar icon → **Settings** to configure:
-
-- **Color palette** — Default (cream/red/grey)
-- **Sounds** — optional chime when Claude interrupts you or finishes a task (uses system sounds, routed through AVAudioPlayer for Bluetooth compatibility)
-
-Click **Submit Feedback** to open a GitHub issue.
-
----
-
-## Uninstall
-
-```bash
-./uninstall.sh
-```
-
-Removes hooks from `~/.claude/settings.json`, deletes `/Applications/NotchAgent.app`, and cleans up `/tmp/notch-agent*`.
-
-> Run `uninstall.sh` before deleting the repo. If you delete the repo first, the dead hook paths in `~/.claude/settings.json` will cause errors on every Claude session. Fix by removing the `notch-agent-hook` entries manually from that file.
+**Indicator** — 3×3 grid of 5×5pt cells. Five animation patterns (snake, single horizontal, single vertical, staggering horizontal, staggering vertical) picked randomly each time Claude starts working.
 
 ---
 
@@ -132,7 +163,6 @@ notch-agent/
 ├── scripts/
 │   ├── bundle.sh                       # Creates NotchAgent.app bundle
 │   └── install.sh                      # bundle.sh + copy to /Applications
-├── docs/
 ├── setup.sh                            # One-command install + hook wiring
 ├── uninstall.sh                        # Full cleanup
 ├── dev.sh                              # Auto-rebuild on file changes
@@ -141,8 +171,12 @@ notch-agent/
 
 ---
 
-## Requirements
+## Contributing
 
-- macOS 13 Ventura or later
-- Claude Code CLI
-- Xcode Command Line Tools
+Issues and PRs welcome. For large changes, open an issue first to discuss.
+
+---
+
+## License
+
+MIT

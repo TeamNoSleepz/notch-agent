@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Sources/NotchAgent/Resources/AppIcon.png" width="128" />
+  <img src="docs/assets/readme-icon.png" width="128" />
   <h1>NotchAgent</h1>
   <p>Live Claude Code status indicator inside your MacBook's notch.</p>
 

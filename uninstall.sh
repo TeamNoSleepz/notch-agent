@@ -2,7 +2,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK="$REPO_DIR/hooks/notch-agent-hook.sh"
+HOOK="$REPO_DIR/hooks/notch-agent-hook"
 SETTINGS="$HOME/.claude/settings.json"
 
 echo "=== NotchAgent Uninstall ==="
@@ -27,7 +27,7 @@ for event, entries in hooks.items():
     before = len(entries)
     hooks[event] = [
         entry for entry in entries
-        if not any(h.get("command", "").startswith(hook_path) for h in entry.get("hooks", []))
+        if not any(hook_path in h.get("command", "") for h in entry.get("hooks", []))
     ]
     if len(hooks[event]) < before:
         removed.append(event)

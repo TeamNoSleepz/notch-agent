@@ -49,11 +49,15 @@ struct VisualEffectBlur: NSViewRepresentable {
 
 // MARK: - Hover State
 
+final class NotchExpandState: ObservableObject {
+    static let shared = NotchExpandState()
+    @Published var expanded = false
+    var visibleListHeight: CGFloat = 256
+}
+
 final class NotchHoverState: ObservableObject {
     static let shared = NotchHoverState()
-    @Published var expanded = false
     @Published var hoveredAgentIndex: Int? = nil
-    var visibleListHeight: CGFloat = 256
 }
 
 // MARK: - Indicator
@@ -174,7 +178,6 @@ final class IndicatorAnimationState: ObservableObject {
 final class IndicatorAnimationStore {
     static let shared = IndicatorAnimationStore()
     private var states: [String: IndicatorAnimationState] = [:]
-
     private init() {}
 
     func state(for key: String) -> IndicatorAnimationState {
@@ -185,12 +188,122 @@ final class IndicatorAnimationStore {
     }
 }
 
+// MARK: - CALayer Grid
+// CABasicAnimation runs on the render server — no SwiftUI AG graph churn per frame.
+
+final class GridIndicatorNSView: NSView {
+    private var cellLayers: [CALayer] = []
+    private var pendingOpacities: [Float] = Array(repeating: -1, count: 9)
+    private static let cell: CGFloat = 5
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.isOpaque = false
+        for i in 0..<9 {
+            let row = i / 3
+            let col = i % 3
+            let s = Self.cell
+            let c = CALayer()
+            // CALayer origin is bottom-left on macOS; row 0 = top visually
+            c.frame = CGRect(x: CGFloat(col) * s, y: CGFloat(2 - row) * s, width: s, height: s)
+            c.opacity = 0
+            c.actions = ["opacity": NSNull(), "backgroundColor": NSNull()]
+            layer?.addSublayer(c)
+            cellLayers.append(c)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(pattern: IndicatorPattern,
+                workingHead: Int, idleHead: Int, awaitingIdx: Int,
+                workingAnimation: WorkingAnimation) {
+        let color = cellCGColor(for: pattern)
+        let path = workingAnimation.path
+        let trailLen = workingAnimation.trailLength
+        for (i, cell) in cellLayers.enumerated() {
+            cell.backgroundColor = color
+            let target = Float(targetOpacity(idx: i, pattern: pattern,
+                                             path: path, trailLen: trailLen,
+                                             workingHead: workingHead,
+                                             idleHead: idleHead,
+                                             awaitingIdx: awaitingIdx))
+            guard target != pendingOpacities[i] else { continue }
+            pendingOpacities[i] = target
+            let ca = CABasicAnimation(keyPath: "opacity")
+            ca.fromValue = cell.presentation()?.opacity ?? cell.opacity
+            ca.toValue   = target
+            ca.duration  = 0.22
+            ca.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            cell.opacity = target
+            cell.add(ca, forKey: "op")
+        }
+    }
+
+    private func cellCGColor(for pattern: IndicatorPattern) -> CGColor {
+        switch pattern {
+        case .working: return CGColor(red: 1.0, green: 0.80, blue: 0.608, alpha: 1)
+        default:       return pattern.nsColor.cgColor
+        }
+    }
+
+    private func targetOpacity(idx: Int, pattern: IndicatorPattern,
+                                path: [Int], trailLen: Int,
+                                workingHead: Int, idleHead: Int, awaitingIdx: Int) -> Double {
+        switch pattern {
+        case .awaiting:
+            let p = [1, 4, 7]
+            for i in 0..<2 {
+                let pi = (awaitingIdx - i + 3) % 3
+                if p[pi] == idx {
+                    return 0.35 + Double(1 - i) * 0.65
+                }
+            }
+            return 0.0
+        case .idle:
+            for i in 0..<trailLen {
+                let pi = (idleHead - i + path.count) % path.count
+                if path[pi] == idx {
+                    return 0.30 + Double(trailLen - 1 - i) / Double(trailLen - 1) * 0.70
+                }
+            }
+            return 0.0
+        case .working:
+            for i in 0..<trailLen {
+                let pi = (workingHead - i + path.count) % path.count
+                if path[pi] == idx {
+                    return 0.30 + Double(trailLen - 1 - i) / Double(trailLen - 1) * 0.70
+                }
+            }
+            return 0.0
+        }
+    }
+}
+
+struct GridIndicatorView: NSViewRepresentable {
+    let pattern: IndicatorPattern
+    let workingHead: Int
+    let idleHead: Int
+    let awaitingIdx: Int
+    let workingAnimation: WorkingAnimation
+
+    func makeNSView(context: Context) -> GridIndicatorNSView {
+        GridIndicatorNSView(frame: CGRect(x: 0, y: 0, width: 15, height: 15))
+    }
+
+    func updateNSView(_ nsView: GridIndicatorNSView, context: Context) {
+        nsView.update(pattern: pattern,
+                      workingHead: workingHead, idleHead: idleHead,
+                      awaitingIdx: awaitingIdx, workingAnimation: workingAnimation)
+    }
+}
+
 struct IndicatorView: View {
     let pattern: IndicatorPattern
     @ObservedObject private var anim: IndicatorAnimationState
 
-    private static let creamColor = Color(red: 1.0, green: 0.80, blue: 0.608)
-    private static let glowColor  = Color(red: 0.80, green: 0.55, blue: 0.25)
+    private static let glowColor = Color(red: 0.80, green: 0.55, blue: 0.25)
 
     init(pattern: IndicatorPattern, animKey: String) {
         self.pattern = pattern
@@ -205,62 +318,14 @@ struct IndicatorView: View {
                     .blur(radius: 9)
                     .frame(width: 18, height: 18)
             }
-
-            VStack(spacing: 0) {
-                ForEach(0..<3, id: \.self) { row in
-                    HStack(spacing: 0) {
-                        ForEach(0..<3, id: \.self) { col in
-                            let idx = row * 3 + col
-                            Rectangle()
-                                .fill(pattern == .working ? Self.creamColor : pattern.color)
-                                .opacity(cellOpacity(idx: idx))
-                                .frame(width: 5, height: 5)
-                                .animation(.easeInOut(duration: 0.22), value: anim.workingHead)
-                                .animation(.easeInOut(duration: 0.22), value: anim.idleHead)
-                                .animation(.easeInOut(duration: 0.22), value: anim.awaitingIdx)
-                        }
-                    }
-                }
-            }
+            GridIndicatorView(
+                pattern: pattern,
+                workingHead: anim.workingHead,
+                idleHead: anim.idleHead,
+                awaitingIdx: anim.awaitingIdx,
+                workingAnimation: anim.workingAnimation
+            )
             .frame(width: 15, height: 15)
-        }
-    }
-
-    private func cellOpacity(idx: Int) -> Double {
-        switch pattern {
-        case .awaiting:
-            let path = [1, 4, 7]
-            let trailLen = 2
-            for i in 0..<trailLen {
-                let pi = (anim.awaitingIdx - i + path.count) % path.count
-                if path[pi] == idx {
-                    let t = Double(trailLen - 1 - i) / Double(trailLen - 1)
-                    return 0.35 + t * 0.65
-                }
-            }
-            return 0.0
-        case .idle:
-            let path = anim.workingAnimation.path
-            let len  = anim.workingAnimation.trailLength
-            for i in 0..<len {
-                let pi = (anim.idleHead - i + path.count) % path.count
-                if path[pi] == idx {
-                    let t = Double(len - 1 - i) / Double(len - 1)
-                    return 0.30 + t * 0.70
-                }
-            }
-            return 0.0
-        case .working:
-            let path = anim.workingAnimation.path
-            let len  = anim.workingAnimation.trailLength
-            for i in 0..<len {
-                let pi = (anim.workingHead - i + path.count) % path.count
-                if path[pi] == idx {
-                    let t = Double(len - 1 - i) / Double(len - 1)
-                    return 0.30 + t * 0.70
-                }
-            }
-            return 0.0
         }
     }
 }
@@ -269,6 +334,7 @@ struct IndicatorView: View {
 
 struct AgentListView: View {
     @ObservedObject private var state = ClaudeState.shared
+    @ObservedObject private var expand = NotchExpandState.shared
     @ObservedObject private var hover = NotchHoverState.shared
     @Binding var measuredHeight: CGFloat
 
@@ -297,13 +363,13 @@ struct AgentListView: View {
     @ViewBuilder
     private var rows: some View {
         ForEach(Array(state.agents.enumerated()), id: \.element.id) { index, agent in
-            AgentRowView(agent: agent, index: index)
-                .opacity(hover.expanded ? 1 : 0)
-                .offset(y: hover.expanded ? 0 : 6)
+            AgentRowView(agent: agent, index: index, isHovered: hover.hoveredAgentIndex == index)
+                .opacity(expand.expanded ? 1 : 0)
+                .offset(y: expand.expanded ? 0 : 6)
                 .animation(
                     .spring(response: 0.38, dampingFraction: 0.88)
-                        .delay(hover.expanded ? 0.08 + Double(index) * 0.05 : 0),
-                    value: hover.expanded
+                        .delay(expand.expanded ? 0.08 + Double(index) * 0.05 : 0),
+                    value: expand.expanded
                 )
         }
     }
@@ -312,12 +378,11 @@ struct AgentListView: View {
 private struct AgentRowView: View {
     let agent: AgentEntry
     let index: Int
-    @ObservedObject private var hover = NotchHoverState.shared
+    let isHovered: Bool
     @ObservedObject private var state = ClaudeState.shared
     @State private var bgOpacity: Double = 0
 
-    var isHovered: Bool { hover.hoveredAgentIndex == index }
-    var isPinned: Bool  { state.pinnedAgentId == agent.id }
+    var isPinned: Bool { state.pinnedAgentId == agent.id }
 
     private var subtitleText: String {
         let dir = URL(fileURLWithPath: agent.cwd).lastPathComponent
@@ -378,9 +443,9 @@ private struct AgentRowView: View {
             }
         }
         .onAppear { bgOpacity = isHovered ? 1 : 0 }
-        .onChange(of: hover.hoveredAgentIndex) { newIndex in
+        .onChange(of: isHovered) { hovered in
             withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
-                bgOpacity = (newIndex == index) ? 1 : 0
+                bgOpacity = hovered ? 1 : 0
             }
         }
     }
@@ -447,7 +512,7 @@ struct NotchShape: Shape {
 struct NotchView: View {
     @ObservedObject var state = ClaudeState.shared
     @ObservedObject var prefs = AppPreferences.shared
-    @ObservedObject var hover = NotchHoverState.shared
+    @ObservedObject var expand = NotchExpandState.shared
 
     let barHeight: CGFloat
     let collapsedWidth: CGFloat
@@ -456,8 +521,8 @@ struct NotchView: View {
     @State private var listContentHeight: CGFloat = 0
 
     var listHeight: CGFloat    { listContentHeight > 0 ? min(listContentHeight, maxListHeight) : maxListHeight }
-    var currentWidth: CGFloat  { hover.expanded ? expandedWidth  : collapsedWidth }
-    var currentHeight: CGFloat { hover.expanded ? barHeight + listHeight : barHeight }
+    var currentWidth: CGFloat  { expand.expanded ? expandedWidth  : collapsedWidth }
+    var currentHeight: CGFloat { expand.expanded ? barHeight + listHeight : barHeight }
 
     private var displayPattern: IndicatorPattern {
         if let id = state.pinnedAgentId, let agent = state.agents.first(where: { $0.id == id }) {
@@ -473,8 +538,8 @@ struct NotchView: View {
     var body: some View {
         ZStack(alignment: .top) {
             // Shape animates width, height, and corner radii together
-            NotchShape(outerRadius: hover.expanded ? 0 : 8,
-                       innerRadius: hover.expanded ? 18 : 10)
+            NotchShape(outerRadius: expand.expanded ? 0 : 8,
+                       innerRadius: expand.expanded ? 18 : 10)
                 .fill(Color.black)
                 .frame(width: currentWidth, height: currentHeight)
 
@@ -506,13 +571,13 @@ struct NotchView: View {
 
                 AgentListView(measuredHeight: $listContentHeight)
                     .frame(width: currentWidth)
-                    .frame(height: hover.expanded ? listHeight : 0, alignment: .top)
+                    .frame(height: expand.expanded ? listHeight : 0, alignment: .top)
                     .clipped()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.spring(response: 0.45, dampingFraction: 0.92), value: hover.expanded)
-        .onChange(of: listHeight) { NotchHoverState.shared.visibleListHeight = $0 }
+        .animation(.spring(response: 0.45, dampingFraction: 0.92), value: expand.expanded)
+        .onChange(of: listHeight) { NotchExpandState.shared.visibleListHeight = $0 }
     }
 }
 
@@ -796,7 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Full expanded pill — sized to the visible shape only
-        let visibleH = NotchHoverState.shared.visibleListHeight
+        let visibleH = NotchExpandState.shared.visibleListHeight
         let expandedZone = NSRect(
             x: notchCenterX - expandedWidth / 2,
             y: screenTop - notchBarHeight - visibleH,
@@ -804,7 +869,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             height: notchBarHeight + visibleH
         )
 
-        let isExpanded = NotchHoverState.shared.expanded
+        let isExpanded = NotchExpandState.shared.expanded
         let hovering = barZone.contains(loc) || (isExpanded && expandedZone.contains(loc))
 
         // Shrink by the outer 8pt horizontal padding and 8pt vertical list padding
@@ -844,7 +909,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if stateChanged {
-                NotchHoverState.shared.expanded = hovering
+                NotchExpandState.shared.expanded = hovering
                 self.panel.ignoresMouseEvents = !hovering
             }
             if hitRectChanged {

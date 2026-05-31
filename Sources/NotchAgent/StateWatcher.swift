@@ -625,6 +625,11 @@ final class ClaudeState: ObservableObject {
             agents[idx] = AgentEntry(id: current.id, cwd: current.cwd, pattern: .idle, tool: nil)
         } else if hasUserMessage && current.pattern == .idle {
             agents[idx] = AgentEntry(id: current.id, cwd: current.cwd, pattern: .working, tool: nil)
+        } else if current.pattern == .awaiting {
+            // Socket event from PreToolUse may have been missed (e.g. socket rebuilding).
+            // Any new JSONL write while awaiting means processing resumed — tool result or
+            // assistant response after approval/denial — so rescue to .working.
+            agents[idx] = AgentEntry(id: current.id, cwd: current.cwd, pattern: .working, tool: nil)
         } else {
             return
         }

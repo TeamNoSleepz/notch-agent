@@ -85,31 +85,34 @@ struct PaletteSwatchView: View {
     let onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(white: 0.12))
-                    .frame(width: 64, height: 52)
-                VStack(spacing: 5) {
-                    Circle().fill(palette.idle).frame(width: 9, height: 9)
-                    Circle().fill(palette.working).frame(width: 9, height: 9)
-                    Circle().fill(palette.awaiting).frame(width: 9, height: 9)
+        Button(action: onTap) {
+            VStack(spacing: 6) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(white: 0.12))
+                        .frame(width: 64, height: 52)
+                    VStack(spacing: 5) {
+                        Circle().fill(palette.idle).frame(width: 9, height: 9)
+                        Circle().fill(palette.working).frame(width: 9, height: 9)
+                        Circle().fill(palette.awaiting).frame(width: 9, height: 9)
+                    }
+                    .opacity(comingSoon ? 0.35 : 1)
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                        .frame(width: 64, height: 52)
+                    if comingSoon {
+                        Text("Soon")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .opacity(comingSoon ? 0.35 : 1)
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-                    .frame(width: 64, height: 52)
-                if comingSoon {
-                    Text("Soon")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
+                Text(palette.name)
+                    .font(.caption)
+                    .foregroundStyle(comingSoon ? Color(white: 0.4) : (isSelected ? .primary : .secondary))
             }
-            Text(palette.name)
-                .font(.caption)
-                .foregroundColor(comingSoon ? Color(white: 0.4) : (isSelected ? .primary : .secondary))
         }
-        .onTapGesture { if !comingSoon { onTap() } }
+        .buttonStyle(.plain)
+        .disabled(comingSoon)
     }
 }
 
@@ -124,11 +127,11 @@ struct ComingSoonSwatchView: View {
                     .frame(width: 64, height: 52)
                 Text("Soon")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Color(white: 0.35))
+                    .foregroundStyle(Color(white: 0.35))
             }
             Text("—")
                 .font(.caption)
-                .foregroundColor(Color(white: 0.3))
+                .foregroundStyle(Color(white: 0.3))
         }
     }
 }
@@ -192,10 +195,10 @@ struct UpdateProgressView: View {
                     ProgressView().scaleEffect(0.75)
                     Text("Installing v\(version)…")
                 } else if succeeded {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     Text("Update complete!")
                 } else {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
                     Text("Update failed")
                 }
                 Spacer()
@@ -212,7 +215,7 @@ struct UpdateProgressView: View {
                 }
                 .frame(height: 140)
                 .background(Color(.windowBackgroundColor))
-                .cornerRadius(6)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .onChange(of: log) { _ in
                     withAnimation { proxy.scrollTo("end", anchor: .bottom) }
                 }
@@ -322,7 +325,7 @@ struct GeneralSettingsView: View {
                     .font(.headline)
                 HStack {
                     Text("v\(currentVersion)")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .font(.caption)
                     Spacer()
                     if let version = availableVersion {

@@ -402,46 +402,48 @@ private struct AgentRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            IndicatorView(pattern: agent.pattern, animKey: agent.id)
-                .frame(width: 32, height: 32)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(subtitleText)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundColor(Color(red: 0.6, green: 0.6, blue: 0.6))
-                Text(stateText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color(red: 0.98, green: 0.98, blue: 0.98))
-            }
-            Spacer()
-            Image(systemName: isPinned ? "pin.fill" : "pin")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isPinned ? .white.opacity(0.9) : .white.opacity(0.35))
-                .opacity(isHovered || isPinned ? 1 : 0)
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
-                .animation(.easeInOut(duration: 0.15), value: isPinned)
-                .padding(.trailing, 4)
-        }
-        .padding(.top, 11)
-        .padding(.bottom, 10)
-        .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(red: 31/255, green: 31/255, blue: 31/255))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color(red: 48/255, green: 48/255, blue: 48/255), lineWidth: 1)
-                )
-                .opacity(bgOpacity)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 8)
-        .onTapGesture {
+        Button {
             withAnimation(.easeInOut(duration: 0.28)) {
                 state.pinnedAgentId = isPinned ? nil : agent.id
             }
+        } label: {
+            HStack(spacing: 10) {
+                IndicatorView(pattern: agent.pattern, animKey: agent.id)
+                    .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(subtitleText)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(Color(red: 0.6, green: 0.6, blue: 0.6))
+                    Text(stateText)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color(red: 0.98, green: 0.98, blue: 0.98))
+                }
+                Spacer()
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isPinned ? .white.opacity(0.9) : .white.opacity(0.35))
+                    .opacity(isHovered || isPinned ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+                    .animation(.easeInOut(duration: 0.15), value: isPinned)
+                    .padding(.trailing, 4)
+            }
+            .padding(.top, 11)
+            .padding(.bottom, 10)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(red: 31/255, green: 31/255, blue: 31/255))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color(red: 48/255, green: 48/255, blue: 48/255), lineWidth: 1)
+                    )
+                    .opacity(bgOpacity)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 8)
         }
+        .buttonStyle(.plain)
         .onAppear { bgOpacity = isHovered ? 1 : 0 }
         .onChange(of: isHovered) { hovered in
             withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
@@ -510,9 +512,9 @@ struct NotchShape: Shape {
 // MARK: - Notch View
 
 struct NotchView: View {
-    @ObservedObject var state = ClaudeState.shared
-    @ObservedObject var prefs = AppPreferences.shared
-    @ObservedObject var expand = NotchExpandState.shared
+    @ObservedObject private var state = ClaudeState.shared
+    @ObservedObject private var prefs = AppPreferences.shared
+    @ObservedObject private var expand = NotchExpandState.shared
 
     let barHeight: CGFloat
     let collapsedWidth: CGFloat

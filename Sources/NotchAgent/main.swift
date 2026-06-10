@@ -580,6 +580,8 @@ struct NotchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.45, dampingFraction: 0.92), value: expand.expanded)
         .onChange(of: listHeight) { NotchExpandState.shared.visibleListHeight = $0 }
+        .opacity(prefs.hideWhenIdle && state.agents.isEmpty ? 0 : 1)
+        .animation(.easeInOut(duration: 0.3), value: state.agents.isEmpty)
     }
 }
 

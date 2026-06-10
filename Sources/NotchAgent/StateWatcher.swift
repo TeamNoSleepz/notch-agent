@@ -641,18 +641,20 @@ final class ClaudeState: ObservableObject {
 
     private func playSound(for old: IndicatorPattern, to new: IndicatorPattern) {
         let prefs = AppPreferences.shared
+        guard prefs.soundEnabled else { return }
         let name: String?
         switch (old, new) {
         case (_, .awaiting):
-            name = prefs.interruptSoundEnabled ? prefs.interruptSoundName : nil
+            name = prefs.interruptSoundName
         case (.working, .idle), (.awaiting, .idle):
-            name = prefs.finishSoundEnabled ? prefs.finishSoundName : nil
+            name = prefs.finishSoundName
         default:
             name = nil
         }
         guard let soundName = name else { return }
         let url = URL(fileURLWithPath: "/System/Library/Sounds/\(soundName).aiff")
         audioPlayer = try? AVAudioPlayer(contentsOf: url)
+        audioPlayer?.volume = Float(prefs.soundVolume)
         audioPlayer?.play()
     }
 }

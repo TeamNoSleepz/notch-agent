@@ -693,7 +693,7 @@ final class UpdateChecker {
         set -e
         rm -rf '\(tmpDir)'
         git clone --depth 1 --branch 'v\(version)' https://github.com/TeamNoSleepz/notch-agent.git '\(tmpDir)'
-        bash '\(tmpDir)/scripts/bundle.sh'
+        bash '\(tmpDir)/scripts/install.sh'
         rm -rf '\(tmpDir)'
         """
 

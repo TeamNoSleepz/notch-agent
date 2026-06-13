@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreGraphics
 import SwiftUI
 import ServiceManagement
 
@@ -46,6 +47,9 @@ final class AppPreferences: ObservableObject {
     @Published var hideWhenIdle: Bool {
         didSet { UserDefaults.standard.set(hideWhenIdle, forKey: "notchagent.hideWhenIdle") }
     }
+    @Published var selectedDisplayID: CGDirectDisplayID {
+        didSet { UserDefaults.standard.set(Int(selectedDisplayID), forKey: "notchagent.selectedDisplayID") }
+    }
     @Published var autoCheckUpdates: Bool {
         didSet { UserDefaults.standard.set(autoCheckUpdates, forKey: "notchagent.autoCheckUpdates") }
     }
@@ -58,6 +62,7 @@ final class AppPreferences: ObservableObject {
         soundVolume     = ud.object(forKey: "notchagent.soundVolume")     != nil ? ud.double(forKey: "notchagent.soundVolume")   : 0.3
         hideWhenIdle    = ud.object(forKey: "notchagent.hideWhenIdle")    != nil ? ud.bool(forKey: "notchagent.hideWhenIdle")    : false
         autoCheckUpdates = ud.object(forKey: "notchagent.autoCheckUpdates") != nil ? ud.bool(forKey: "notchagent.autoCheckUpdates") : true
+        selectedDisplayID = CGDirectDisplayID(ud.integer(forKey: "notchagent.selectedDisplayID"))
     }
 }
 
@@ -171,12 +176,14 @@ struct UpdateProgressView: View {
 
 private enum SettingsTab: String, CaseIterable {
     case general = "General"
+    case display = "Display"
     case sound   = "Sound"
     case about   = "About"
 
     var icon: String {
         switch self {
         case .general: return "gearshape.fill"
+        case .display: return "display.2"
         case .sound:   return "speaker.wave.2.fill"
         case .about:   return "info.circle.fill"
         }
@@ -185,6 +192,7 @@ private enum SettingsTab: String, CaseIterable {
     var iconBackground: Color {
         switch self {
         case .general: return Color(white: 0.45)
+        case .display: return .purple
         case .sound:   return .orange
         case .about:   return .blue
         }
@@ -351,6 +359,67 @@ private struct GeneralSettingsView: View {
             .padding(24)
         }
         .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
+    }
+}
+
+// MARK: - Display Settings
+
+private struct DisplaySettingsView: View {
+    @ObservedObject private var prefs = AppPreferences.shared
+    @State private var screens: [NSScreen] = NSScreen.screens
+
+    private func screenLabel(_ screen: NSScreen) -> String {
+        screen.hasNotch ? "\(screen.localizedName) (notch)" : screen.localizedName
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeader(title: "Monitor")
+                    GroupBox {
+                        HStack {
+                            Text("Show notch on")
+                                .font(.system(size: 13))
+                            Spacer()
+                            if screens.count > 1 {
+                                Picker("", selection: $prefs.selectedDisplayID) {
+                                    ForEach(screens, id: \.displayID) { screen in
+                                        Text(screenLabel(screen)).tag(screen.displayID)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .frame(width: 200)
+                                .onChange(of: prefs.selectedDisplayID) { _ in
+                                    NotificationCenter.default.post(
+                                        name: NSApplication.didChangeScreenParametersNotification,
+                                        object: nil
+                                    )
+                                }
+                            } else {
+                                Text(screens.first.map { screenLabel($0) } ?? "Built-in Display")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .modifier(RowBackground())
+                    }
+
+                    if screens.count == 1 {
+                        Text("Connect an external display to choose where the notch appears.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(24)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screens = NSScreen.screens
+        }
     }
 }
 
@@ -650,6 +719,7 @@ struct SettingsView: View {
             Group {
                 switch selectedTab {
                 case .general: GeneralSettingsView()
+                case .display: DisplaySettingsView()
                 case .sound:   SoundSettingsView()
                 case .about:   AboutSettingsView()
                 }

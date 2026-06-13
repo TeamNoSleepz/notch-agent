@@ -33,9 +33,9 @@ cat > "$BUNDLE/Contents/Info.plist" << 'EOF'
     <key>CFBundleExecutable</key>
     <string>NotchAgent</string>
     <key>CFBundleVersion</key>
-    <string>0.6</string>
+    <string>0.7</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.6</string>
+    <string>0.7</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSUIElement</key>

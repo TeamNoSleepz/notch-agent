@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreGraphics
 import SwiftUI
 import ServiceManagement
 import TelemetryClient
@@ -585,11 +586,21 @@ struct NotchView: View {
     }
 }
 
+// MARK: - NSScreen helpers
+
+extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? 0
+    }
+    var hasNotch: Bool { auxiliaryTopLeftArea != nil }
+}
+
 // MARK: - App Delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NotchPanel!
     private var contentWrapper: NotchContentView!
+    private var hostingView: NSHostingView<NotchView>!
     private let sideSlotWidth: CGFloat = 40  // 32pt item + 8pt inward padding
     private var statusItem: NSStatusItem!
     private let expandedHeight: CGFloat = 320
@@ -598,6 +609,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var collapsedNotchWidth: CGFloat = 80
     private var notchCenterX: CGFloat = 0
     private var mouseMonitor: Any?
+
+    private var targetScreen: NSScreen {
+        let stored = AppPreferences.shared.selectedDisplayID
+        if stored != 0, let s = NSScreen.screens.first(where: { $0.displayID == stored }) { return s }
+        if let s = NSScreen.screens.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) { return s }
+        return NSScreen.screens.first ?? NSScreen.main!
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hides the app from the Dock and Cmd+Tab switcher
@@ -612,6 +630,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             "macOSVersion": ProcessInfo.processInfo.operatingSystemVersionString,
         ])
+
+        // Seed display preference to built-in on first launch so picker shows correct default
+        if AppPreferences.shared.selectedDisplayID == 0,
+           let builtIn = NSScreen.screens.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) {
+            AppPreferences.shared.selectedDisplayID = builtIn.displayID
+        }
 
         buildPanel()
         centerOverNotch()
@@ -766,7 +790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             collapsedNotchWidth = (notchRight - notchLeft) + sideSlotWidth * 2
             notchCenterX = sf.origin.x + (notchLeft + notchRight) / 2
         } else {
-            collapsedNotchWidth = sideSlotWidth * 2
+            collapsedNotchWidth = 320
             notchCenterX = sf.origin.x + sf.width / 2
         }
     }
@@ -781,9 +805,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildPanel() {
-        let screen = NSScreen.main
-        if let s = screen { updateGeometry(for: s) }
-        let frame = screen.map { panelFrame(for: $0) } ?? NSRect(x: 0, y: 0, width: 64, height: 32)
+        let screen = targetScreen
+        updateGeometry(for: screen)
+        let frame = panelFrame(for: screen)
         let size = frame.size
 
         panel = NotchPanel(
@@ -815,20 +839,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         contentWrapper = NotchContentView(frame: NSRect(origin: .zero, size: size))
         contentWrapper.autoresizingMask = [.width, .height]
-        let hosting = NSHostingView(rootView: NotchView(barHeight: notchBarHeight, collapsedWidth: collapsedNotchWidth))
-        hosting.frame = NSRect(origin: .zero, size: size)
-        hosting.autoresizingMask = [.width, .height]
-        contentWrapper.addSubview(hosting)
+        hostingView = NSHostingView(rootView: NotchView(barHeight: notchBarHeight, collapsedWidth: collapsedNotchWidth))
+        hostingView.frame = NSRect(origin: .zero, size: size)
+        hostingView.autoresizingMask = [.width, .height]
+        contentWrapper.addSubview(hostingView)
         panel.contentView = contentWrapper
     }
 
     @objc private func screensChanged() {
-        if let s = NSScreen.main { updateGeometry(for: s) }
+        updateGeometry(for: targetScreen)
+        hostingView.rootView = NotchView(barHeight: notchBarHeight, collapsedWidth: collapsedNotchWidth)
         centerOverNotch()
     }
 
     private func centerOverNotch() {
-        guard let screen = NSScreen.main else { return }
+        let screen = targetScreen
         panel.setFrame(panelFrame(for: screen), display: false)
     }
 
@@ -851,7 +876,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHoverState() {
-        guard let screen = NSScreen.main else { return }
+        let screen = targetScreen
         let loc = NSEvent.mouseLocation
         let pf = panelFrame(for: screen)
         let screenTop = pf.maxY

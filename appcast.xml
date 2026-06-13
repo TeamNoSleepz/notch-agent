@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>NotchAgent</title>
+        <link>https://raw.githubusercontent.com/TeamNoSleepz/notch-agent/main/appcast.xml</link>
+        <description>NotchAgent release feed</description>
+        <language>en</language>
+
+        <item>
+            <title>Version 0.8</title>
+            <sparkle:version>0.8</sparkle:version>
+            <sparkle:shortVersionString>0.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <pubDate>Fri, 13 Jun 2026 00:00:00 +0000</pubDate>
+            <enclosure
+                url="https://github.com/TeamNoSleepz/notch-agent/releases/download/v0.8/NotchAgent.zip"
+                sparkle:version="0.8"
+                sparkle:edSignature="zqFYrWG0sfAFXKAs0/mLLo1tcUFSUABVfv2CKt+MUUzebZtKaCjnwrqhqnb5uxY5YlBLAabmrXN7GE5ab/ynBw=="
+                length="3752591"
+                type="application/octet-stream"/>
+        </item>
+
+    </channel>
+</rss>

@@ -50,10 +50,6 @@ final class AppPreferences: ObservableObject {
     @Published var selectedDisplayID: CGDirectDisplayID {
         didSet { UserDefaults.standard.set(Int(selectedDisplayID), forKey: "notchagent.selectedDisplayID") }
     }
-    @Published var autoCheckUpdates: Bool {
-        didSet { UserDefaults.standard.set(autoCheckUpdates, forKey: "notchagent.autoCheckUpdates") }
-    }
-
     private init() {
         let ud = UserDefaults.standard
         interruptSoundName = ud.string(forKey: "notchagent.interruptSoundName") ?? "Ping"
@@ -61,7 +57,6 @@ final class AppPreferences: ObservableObject {
         soundEnabled    = ud.object(forKey: "notchagent.soundEnabled")    != nil ? ud.bool(forKey: "notchagent.soundEnabled")    : true
         soundVolume     = ud.object(forKey: "notchagent.soundVolume")     != nil ? ud.double(forKey: "notchagent.soundVolume")   : 0.3
         hideWhenIdle    = ud.object(forKey: "notchagent.hideWhenIdle")    != nil ? ud.bool(forKey: "notchagent.hideWhenIdle")    : false
-        autoCheckUpdates = ud.object(forKey: "notchagent.autoCheckUpdates") != nil ? ud.bool(forKey: "notchagent.autoCheckUpdates") : true
         selectedDisplayID = CGDirectDisplayID(ud.integer(forKey: "notchagent.selectedDisplayID"))
     }
 }
@@ -94,79 +89,6 @@ final class HookManager {
                 DispatchQueue.main.async { completion(task.terminationStatus == 0) }
             } catch {
                 DispatchQueue.main.async { completion(false) }
-            }
-        }
-    }
-}
-
-// MARK: - Update Progress Sheet
-
-struct UpdateProgressView: View {
-    let version: String
-    @Binding var isPresented: Bool
-
-    @State private var log = ""
-    @State private var isRunning = true
-    @State private var succeeded = false
-    @State private var started = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                if isRunning {
-                    ProgressView().scaleEffect(0.75)
-                    Text("Installing v\(version)…")
-                } else if succeeded {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text("Update complete!")
-                } else {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-                    Text("Update failed")
-                }
-                Spacer()
-            }
-            .font(.headline)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(log.isEmpty ? " " : log)
-                        .font(.system(size: 10, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(6)
-                        .id("end")
-                }
-                .frame(height: 140)
-                .background(Color(.windowBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onChange(of: log) { _ in
-                    withAnimation { proxy.scrollTo("end", anchor: .bottom) }
-                }
-            }
-
-            HStack {
-                Spacer()
-                if succeeded {
-                    Button("Relaunch Now") { UpdateChecker.relaunch() }
-                        .buttonStyle(.borderedProminent)
-                } else if !isRunning {
-                    Button("Close") { isPresented = false }
-                    Button("View on GitHub") {
-                        NSWorkspace.shared.open(UpdateChecker.releasesURL)
-                        isPresented = false
-                    }
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-        .onAppear {
-            guard !started else { return }
-            started = true
-            UpdateChecker.install(version: version) { chunk in
-                log += chunk
-            } completion: { ok in
-                isRunning = false
-                succeeded = ok
             }
         }
     }
@@ -534,33 +456,12 @@ private struct SoundSettingsView: View {
 // MARK: - About Settings
 
 private struct AboutSettingsView: View {
-    @ObservedObject private var prefs = AppPreferences.shared
-    @State private var checkingUpdate = false
-    @State private var availableVersion: String? = nil
-    @State private var upToDate = false
-    @State private var showUpdateSheet = false
     @State private var showClearHooksConfirm = false
     private let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
 
     private func open(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
-    }
-
-    private func checkForUpdates() {
-        guard !checkingUpdate else { return }
-        if availableVersion != nil { showUpdateSheet = true; return }
-        checkingUpdate = true
-        upToDate = false
-        UpdateChecker.check { version in
-            checkingUpdate = false
-            if let version {
-                availableVersion = version
-            } else {
-                upToDate = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { upToDate = false }
-            }
-        }
     }
 
     var body: some View {
@@ -590,15 +491,12 @@ private struct AboutSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     SectionHeader(title: "Updates")
                     GroupBox {
-                        Button(action: checkForUpdates) {
+                        Button(action: { UpdaterManager.shared.controller?.checkForUpdates(nil) }) {
                             HStack(spacing: 10) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.system(size: 13))
                                     .frame(width: 16)
-                                Text(checkingUpdate ? "Checking…"
-                                     : upToDate ? "Up to date ✓"
-                                     : availableVersion != nil ? "Update to v\(availableVersion!)"
-                                     : "Check for updates")
+                                Text("Check for updates")
                                     .font(.system(size: 13))
                                 Spacer()
                                 Image(systemName: "arrow.up.right")
@@ -608,22 +506,6 @@ private struct AboutSettingsView: View {
                             .modifier(RowBackground())
                         }
                         .buttonStyle(.plain)
-                        .disabled(checkingUpdate)
-
-                        RowDivider()
-
-                        HStack(spacing: 10) {
-                            Image(systemName: "arrow.clockwise.circle")
-                                .font(.system(size: 13))
-                                .frame(width: 16)
-                            Text("Automatically check for updates")
-                                .font(.system(size: 13))
-                            Spacer()
-                            Toggle("", isOn: $prefs.autoCheckUpdates)
-                                .toggleStyle(.switch)
-                                .labelsHidden()
-                        }
-                        .modifier(RowBackground())
                     }
                 }
                 .padding(.bottom, 16)
@@ -676,12 +558,6 @@ private struct AboutSettingsView: View {
             }
             .padding(24)
         }
-        .sheet(isPresented: $showUpdateSheet) {
-            if let version = availableVersion {
-                UpdateProgressView(version: version, isPresented: $showUpdateSheet)
-                    .onDisappear { availableVersion = nil }
-            }
-        }
         .alert("Clear CLI Hooks", isPresented: $showClearHooksConfirm) {
             Button("Clear Hooks", role: .destructive) {
                 HookManager.clearCLIHooks { _ in }
@@ -728,95 +604,6 @@ struct SettingsView: View {
             .background(Color(white: 0.118))
         }
         .frame(height: 608)
-    }
-}
-
-// MARK: - Update Checker
-
-final class UpdateChecker {
-    static let releasesURL = URL(string: "https://github.com/TeamNoSleepz/notch-agent/releases")!
-    private static let apiURL = URL(string: "https://api.github.com/repos/TeamNoSleepz/notch-agent/releases/latest")!
-
-    static func check(completion: @escaping (String?) -> Void) {
-        var request = URLRequest(url: apiURL)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 10
-
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = json["tag_name"] as? String else {
-                DispatchQueue.main.async { completion(nil) }
-                return
-            }
-            let remote = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-            let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-            DispatchQueue.main.async {
-                completion(isNewer(remote, than: current) ? remote : nil)
-            }
-        }.resume()
-    }
-
-    static func install(version: String, progress: @escaping (String) -> Void, completion: @escaping (Bool) -> Void) {
-        let tmpDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("notchagent-update")
-        let script = """
-        set -e
-        rm -rf '\(tmpDir)'
-        git clone --depth 1 --branch 'v\(version)' https://github.com/TeamNoSleepz/notch-agent.git '\(tmpDir)'
-        bash '\(tmpDir)/scripts/install.sh'
-        rm -rf '\(tmpDir)'
-        """
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            task.arguments = ["-c", script]
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "/usr/bin:/usr/local/bin:/opt/homebrew/bin:/bin:/sbin:/usr/sbin"
-            task.environment = env
-
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            pipe.fileHandleForReading.readabilityHandler = { fh in
-                let data = fh.availableData
-                if let str = String(data: data, encoding: .utf8), !str.isEmpty {
-                    DispatchQueue.main.async { progress(str) }
-                }
-            }
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-                pipe.fileHandleForReading.readabilityHandler = nil
-                DispatchQueue.main.async { completion(task.terminationStatus == 0) }
-            } catch {
-                DispatchQueue.main.async {
-                    progress("Error: \(error.localizedDescription)\n")
-                    completion(false)
-                }
-            }
-        }
-    }
-
-    static func relaunch() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "sleep 0.5 && open /Applications/NotchAgent.app"]
-        try? task.run()
-        NSApp.terminate(nil)
-    }
-
-    private static func isNewer(_ a: String, than b: String) -> Bool {
-        let av = a.split(separator: ".").compactMap { Int($0) }
-        let bv = b.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(av.count, bv.count) {
-            let ai = i < av.count ? av[i] : 0
-            let bi = i < bv.count ? bv[i] : 0
-            if ai != bi { return ai > bi }
-        }
-        return false
     }
 }
 

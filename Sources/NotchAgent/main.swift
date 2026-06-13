@@ -4,6 +4,18 @@ import CoreGraphics
 import SwiftUI
 import ServiceManagement
 import TelemetryClient
+import Sparkle
+
+// MARK: - Updater
+
+final class UpdaterManager: NSObject {
+    static let shared = UpdaterManager()
+    private(set) var controller: SPUStandardUpdaterController?
+
+    func start() {
+        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    }
+}
 
 // MARK: - Panel
 
@@ -636,6 +648,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let builtIn = NSScreen.screens.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) {
             AppPreferences.shared.selectedDisplayID = builtIn.displayID
         }
+
+        UpdaterManager.shared.start()
 
         buildPanel()
         centerOverNotch()
